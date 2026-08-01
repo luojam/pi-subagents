@@ -9,6 +9,7 @@ import {
     wrapTextWithAnsi,
 } from '@earendil-works/pi-tui';
 import { truncateUtf8Head, truncateUtf8Tail } from './run-utils.ts';
+import { sanitizeTerminalText } from './terminal-sanitizer.ts';
 import type { SubagentRunSnapshot, SubagentRunState, SubagentToolCallSnapshot } from './types.ts';
 
 const TASK_SUMMARY_MAX_BYTES = 512;
@@ -22,6 +23,7 @@ const TRUNCATED_TASK_END_PADDING_COLUMNS = 3;
 
 type ThemeColor = 'toolOutput' | 'muted' | 'dim' | 'error';
 
+// biome-ignore lint/suspicious/noControlCharactersInRegex: Parses intentional ANSI SGR sequences.
 const SGR_SEQUENCE = /\x1B\[([\d;:]*)m/gu;
 
 /** Close styles active at the end of text without resetting its inherited background. */
@@ -135,21 +137,12 @@ class WidthSafeLines implements Component {
     }
 }
 
-const ESCAPE_SEQUENCE = /\x1B(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1B\\)?)/gu;
-
 export function sanitizeSingleLine(text: string): string {
-    return text
-        .replace(ESCAPE_SEQUENCE, '')
-        .replace(/[\x00-\x1F\x7F-\x9F]/gu, ' ')
-        .replace(/\s+/gu, ' ')
-        .trim();
+    return sanitizeTerminalText(text);
 }
 
 function safeMultiline(text: string): string {
-    return text
-        .replace(/\r\n?/gu, '\n')
-        .replace(ESCAPE_SEQUENCE, '')
-        .replace(/[\x00-\x09\x0B-\x1F\x7F-\x9F]/gu, ' ');
+    return sanitizeTerminalText(text, true);
 }
 
 function boundedLine(text: string, maxBytes: number): string {

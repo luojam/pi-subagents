@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { truncateUtf8Head, truncateUtf8Tail, UPDATE_TEXT_MAX_BYTES } from './run-utils.ts';
 import { SubagentRunner } from './runner.ts';
+import { sanitizeTerminalText } from './terminal-sanitizer.ts';
 import type {
     RelevantSubagentRun,
     SubagentRunnerEvent,
@@ -76,19 +77,8 @@ function isTerminal(state: SubagentRunState): boolean {
     return TERMINAL_STATES.has(state);
 }
 
-function sanitizeText(text: string, preserveNewlines = false): string {
-    const normalized = preserveNewlines ? text.replace(/\r\n?/gu, '\n') : text;
-    const withoutControls = normalized
-        .replace(/\x1B(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1B\\)?)/gu, '')
-        .replace(
-            preserveNewlines ? /[\x00-\x09\x0B-\x1F\x7F-\x9F]/gu : /[\x00-\x1F\x7F-\x9F]/gu,
-            ' '
-        );
-    return preserveNewlines ? withoutControls : withoutControls.replace(/\s+/gu, ' ').trim();
-}
-
 function boundedString(value: string, maxBytes: number): string {
-    return truncateUtf8Head(sanitizeText(value), maxBytes);
+    return truncateUtf8Head(sanitizeTerminalText(value), maxBytes);
 }
 
 function summarizeKnownTool(toolName: string, args: Record<string, unknown>): string | undefined {
@@ -280,7 +270,7 @@ export class SubagentManager {
         const run: MutableRun = {
             id,
             state: 'queued',
-            task: truncateUtf8Head(sanitizeText(options.task, true), MAX_TASK_BYTES),
+            task: truncateUtf8Head(sanitizeTerminalText(options.task, true), MAX_TASK_BYTES),
             cwd: boundedString(options.cwd, MAX_PATH_BYTES),
             model: {
                 provider: boundedString(options.model.provider, 512),
@@ -390,13 +380,13 @@ export class SubagentManager {
                 break;
             case 'thinking_delta':
                 run.thinkingTail = truncateUtf8Tail(
-                    run.thinkingTail + sanitizeText(event.delta, true),
+                    run.thinkingTail + sanitizeTerminalText(event.delta, true),
                     UPDATE_TEXT_MAX_BYTES
                 );
                 break;
             case 'text_delta':
                 run.responseTail = truncateUtf8Tail(
-                    run.responseTail + sanitizeText(event.delta, true),
+                    run.responseTail + sanitizeTerminalText(event.delta, true),
                     UPDATE_TEXT_MAX_BYTES
                 );
                 break;
