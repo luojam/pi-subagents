@@ -11,7 +11,8 @@ import {
 } from '@earendil-works/pi-coding-agent';
 import { createInheritedModelRuntime, type InheritedModelRuntimeSetup } from './model-runtime.ts';
 import { getSubagentSystemPrompt } from './prompts.ts';
-import { truncateModelOutput, usageFromEntries } from './run-utils.ts';
+import { truncateModelOutput } from './run/text.ts';
+import { usageFromEntries } from './run/usage.ts';
 import { observeSubagentSession } from './session-observer.ts';
 import type { SubagentRunnerEvent, SubagentRunnerOptions, SubagentRunnerResult } from './types.ts';
 

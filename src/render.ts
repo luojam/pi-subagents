@@ -8,9 +8,9 @@ import {
     visibleWidth,
     wrapTextWithAnsi,
 } from '@earendil-works/pi-tui';
-import { truncateUtf8Head, truncateUtf8Tail } from './run-utils.ts';
 import { sanitizeTerminalText } from './terminal-sanitizer.ts';
 import type { SubagentRunSnapshot, SubagentRunState, SubagentToolCallSnapshot } from './types.ts';
+import { truncateUtf8Head, truncateUtf8Tail } from './utf8.ts';
 
 const TASK_SUMMARY_MAX_BYTES = 512;
 const TOOL_SUMMARY_MAX_BYTES = 1_024;

@@ -1,7 +1,15 @@
 import { randomUUID } from 'node:crypto';
-import { truncateUtf8Head, truncateUtf8Tail, UPDATE_TEXT_MAX_BYTES } from './run-utils.ts';
+import {
+    appendStreamedText,
+    sanitizeError,
+    sanitizeModelPart,
+    sanitizePath,
+    sanitizeTask,
+    sanitizeToolName,
+    summarizeToolArguments,
+    summarizeToolProgress,
+} from './run/text.ts';
 import { SubagentRunner } from './runner.ts';
-import { sanitizeTerminalText } from './terminal-sanitizer.ts';
 import type {
     RelevantSubagentRun,
     SubagentRunnerEvent,
@@ -18,11 +26,6 @@ import type {
 const TICK_MS = 1_000;
 const TEXT_UPDATE_THROTTLE_MS = 100;
 const MAX_RECENT_TOOLS = 10;
-const MAX_TASK_BYTES = 8 * 1024;
-const MAX_PATH_BYTES = 2 * 1024;
-const MAX_ARGUMENT_BYTES = 2 * 1024;
-const MAX_PROGRESS_BYTES = 512;
-const MAX_ERROR_BYTES = 2 * 1024;
 
 const TERMINAL_STATES = new Set<SubagentRunState>(['completed', 'failed', 'cancelled']);
 
@@ -77,109 +80,6 @@ function isTerminal(state: SubagentRunState): boolean {
     return TERMINAL_STATES.has(state);
 }
 
-function boundedString(value: string, maxBytes: number): string {
-    return truncateUtf8Head(sanitizeTerminalText(value), maxBytes);
-}
-
-function summarizeKnownTool(toolName: string, args: Record<string, unknown>): string | undefined {
-    const text = (key: string): string | undefined =>
-        typeof args[key] === 'string' ? args[key] : undefined;
-    const path = text('path');
-
-    switch (toolName) {
-        case 'read': {
-            if (!path) return undefined;
-            const offset = typeof args.offset === 'number' ? args.offset : undefined;
-            const limit = typeof args.limit === 'number' ? args.limit : undefined;
-            const start = offset ?? (limit === undefined ? undefined : 1);
-            const range =
-                start === undefined
-                    ? ''
-                    : `:${start}${limit === undefined ? '' : `-${start + limit - 1}`}`;
-            return `${path}${range}`;
-        }
-        case 'bash':
-            return text('command');
-        case 'edit': {
-            if (!path) return undefined;
-            const count = Array.isArray(args.edits) ? args.edits.length : undefined;
-            return count && count > 1 ? `${path} (${count} edits)` : path;
-        }
-        case 'write':
-            return path;
-        case 'grep': {
-            const pattern = text('pattern');
-            const searchPath = path ?? text('cwd');
-            if (!pattern) return searchPath;
-            return `/${pattern.replaceAll('/', '\\/')}/${searchPath ? ` in ${searchPath}` : ''}`;
-        }
-        case 'find': {
-            const pattern = text('pattern');
-            return [pattern, path ? `in ${path}` : undefined].filter(Boolean).join(' ');
-        }
-        default:
-            return undefined;
-    }
-}
-
-function sanitizeJsonValue(value: unknown, key: string | undefined, depth: number): unknown {
-    if (depth > 3) return '[nested]';
-    if (typeof value === 'string') {
-        if (key && /^(?:content|oldText|newText|replacement|patch)$/iu.test(key)) {
-            return `[${Buffer.byteLength(value, 'utf8')} bytes]`;
-        }
-        return boundedString(value, 512);
-    }
-    if (value === null || typeof value === 'number' || typeof value === 'boolean') return value;
-    if (Array.isArray(value)) {
-        const items = value
-            .slice(0, 5)
-            .map((item) => sanitizeJsonValue(item, undefined, depth + 1));
-        if (value.length > items.length) items.push(`[${value.length - items.length} more]`);
-        return items;
-    }
-    if (typeof value === 'object') {
-        const result: Record<string, unknown> = {};
-        for (const [childKey, childValue] of Object.entries(value).slice(0, 12)) {
-            result[childKey] = sanitizeJsonValue(childValue, childKey, depth + 1);
-        }
-        return result;
-    }
-    return String(value);
-}
-
-export function summarizeToolArguments(toolName: string, args: unknown): string {
-    if (!args || typeof args !== 'object') {
-        return boundedString(typeof args === 'string' ? args : '', MAX_ARGUMENT_BYTES);
-    }
-
-    const known = summarizeKnownTool(toolName, args as Record<string, unknown>);
-    if (known !== undefined) return boundedString(known, MAX_ARGUMENT_BYTES);
-
-    try {
-        return boundedString(
-            JSON.stringify(sanitizeJsonValue(args, undefined, 0)) ?? '',
-            MAX_ARGUMENT_BYTES
-        );
-    } catch {
-        return '[unserializable arguments]';
-    }
-}
-
-function summarizeProgress(partialResult: unknown): string | undefined {
-    if (!partialResult || typeof partialResult !== 'object') return undefined;
-    const content = (partialResult as { content?: unknown }).content;
-    if (!Array.isArray(content)) return undefined;
-    const text = content.find(
-        (item): item is { type: 'text'; text: string } =>
-            !!item &&
-            typeof item === 'object' &&
-            (item as { type?: unknown }).type === 'text' &&
-            typeof (item as { text?: unknown }).text === 'string'
-    )?.text;
-    return text ? boundedString(text, MAX_PROGRESS_BYTES) : undefined;
-}
-
 function copyTool(tool: MutableToolCall): SubagentToolCallSnapshot {
     return Object.freeze({
         id: tool.id,
@@ -221,10 +121,6 @@ function snapshotOf(run: MutableRun): SubagentRunSnapshot {
 
 function isAbortError(error: unknown): boolean {
     return error instanceof Error && error.name === 'AbortError';
-}
-
-function errorMessage(error: unknown): string {
-    return boundedString(error instanceof Error ? error.message : String(error), MAX_ERROR_BYTES);
 }
 
 export class SubagentManager {
@@ -270,11 +166,11 @@ export class SubagentManager {
         const run: MutableRun = {
             id,
             state: 'queued',
-            task: truncateUtf8Head(sanitizeTerminalText(options.task, true), MAX_TASK_BYTES),
-            cwd: boundedString(options.cwd, MAX_PATH_BYTES),
+            task: sanitizeTask(options.task),
+            cwd: sanitizePath(options.cwd),
             model: {
-                provider: boundedString(options.model.provider, 512),
-                id: boundedString(options.model.id, 512),
+                provider: sanitizeModelPart(options.model.provider),
+                id: sanitizeModelPart(options.model.id),
             },
             thinkingLevel: options.thinkingLevel,
             queuedAt,
@@ -352,7 +248,7 @@ export class SubagentManager {
             return { ...result, details: snapshotOf(run) };
         } catch (error) {
             const cancelled = isAbortError(error) || options.signal?.aborted === true;
-            this.transitionTerminal(run, cancelled ? 'cancelled' : 'failed', errorMessage(error));
+            this.transitionTerminal(run, cancelled ? 'cancelled' : 'failed', sanitizeError(error));
             throw error;
         }
     }
@@ -379,21 +275,15 @@ export class SubagentManager {
             case 'turn_ended':
                 break;
             case 'thinking_delta':
-                run.thinkingTail = truncateUtf8Tail(
-                    run.thinkingTail + sanitizeTerminalText(event.delta, true),
-                    UPDATE_TEXT_MAX_BYTES
-                );
+                run.thinkingTail = appendStreamedText(run.thinkingTail, event.delta);
                 break;
             case 'text_delta':
-                run.responseTail = truncateUtf8Tail(
-                    run.responseTail + sanitizeTerminalText(event.delta, true),
-                    UPDATE_TEXT_MAX_BYTES
-                );
+                run.responseTail = appendStreamedText(run.responseTail, event.delta);
                 break;
             case 'tool_started': {
                 const tool: MutableToolCall = {
                     id: event.toolCallId,
-                    name: boundedString(event.toolName, 128),
+                    name: sanitizeToolName(event.toolName),
                     inputSummary: summarizeToolArguments(event.toolName, event.args),
                     state: 'running',
                     startedAt: now,
@@ -404,7 +294,7 @@ export class SubagentManager {
             }
             case 'tool_updated': {
                 const tool = run.activeTools.get(event.toolCallId);
-                if (tool) tool.progressSummary = summarizeProgress(event.partialResult);
+                if (tool) tool.progressSummary = summarizeToolProgress(event.partialResult);
                 break;
             }
             case 'tool_ended': {
