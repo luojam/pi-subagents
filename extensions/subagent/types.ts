@@ -5,6 +5,7 @@ import type {
     SessionStats,
 } from '@earendil-works/pi-coding-agent';
 
+export type RunId = string;
 export type SubagentModel = NonNullable<CreateAgentSessionOptions['model']>;
 export type SubagentThinkingLevel = NonNullable<CreateAgentSessionOptions['thinkingLevel']>;
 
@@ -12,9 +13,11 @@ export type SubagentRunState =
     | 'queued'
     | 'starting'
     | 'running'
+    | 'cancelling'
     | 'completed'
     | 'failed'
-    | 'cancelled';
+    | 'cancelled'
+    | 'interrupted';
 
 export type SubagentToolCallState = 'running' | 'completed' | 'failed';
 
@@ -45,12 +48,15 @@ export interface SubagentSessionUsage {
     readonly cost: number;
 }
 
-/** Immutable, bounded observable state for one manager-owned run. */
 export interface SubagentRunSnapshot {
-    /** Stable manager identifier, available before the child session exists. */
-    readonly id: string;
-    /** Isolated in-memory AgentSession identifier, once created. */
+    /** Stable service identifier, available before the child session exists. */
+    readonly id: RunId;
+    /** Optional provider thread reference, reserved for runtimes which expose one. */
+    readonly threadId?: string;
+    /** Child AgentSession identifier, once created. */
     readonly sessionId?: string;
+    /** Durable child JSONL transcript, once created. */
+    readonly sessionFile?: string;
     readonly state: SubagentRunState;
     readonly task: string;
     readonly cwd: string;
@@ -72,10 +78,14 @@ export interface SubagentRunSnapshot {
     readonly error?: string;
 }
 
-/** Structured observations emitted by the runner and reduced only by the manager. */
+/** Structured observations emitted by a Runner and reduced only by RunStore. */
 export type SubagentRunnerEvent =
     | { readonly type: 'setup_started' }
-    | { readonly type: 'session_ready'; readonly sessionId: string }
+    | {
+          readonly type: 'session_ready';
+          readonly sessionId: string;
+          readonly sessionFile: string;
+      }
     | { readonly type: 'turn_started' }
     | { readonly type: 'turn_ended' }
     | { readonly type: 'thinking_delta'; readonly delta: string }
@@ -110,16 +120,29 @@ export interface SubagentRunOptions {
 }
 
 export interface SubagentRunnerOptions extends SubagentRunOptions {
+    /** Directory containing persistent child JSONL sessions. */
+    childSessionDirectory: string;
     onEvent?: (event: SubagentRunnerEvent) => void;
 }
 
-export interface SubagentRunnerResult {
+export interface SubagentExecutionResult {
     text: string;
     usage: Usage;
 }
 
-export interface SubagentRunResult extends SubagentRunnerResult {
+export interface SubagentExecutionHandle {
+    readonly outcome: Promise<SubagentExecutionResult>;
+    readonly released: Promise<void>;
+}
+
+export interface SubagentRunResult extends SubagentExecutionResult {
     details: SubagentRunSnapshot;
+}
+
+export interface SubagentRunHandle {
+    readonly id: RunId;
+    readonly result: Promise<SubagentRunResult>;
+    cancel(): boolean;
 }
 
 export interface RelevantSubagentRun {

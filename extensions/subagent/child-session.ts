@@ -1,3 +1,4 @@
+import { writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import {
     type AgentSession,
@@ -11,19 +12,26 @@ import {
 } from '@earendil-works/pi-coding-agent';
 import { createInheritedModelRuntime, type InheritedModelRuntimeSetup } from './model-runtime.ts';
 import { getSubagentSystemPrompt } from './prompts.ts';
-import { truncateModelOutput } from './run/text.ts';
-import { usageFromEntries } from './run/usage.ts';
 import { observeSubagentSession } from './session-observer.ts';
-import type { SubagentRunnerEvent, SubagentRunnerOptions, SubagentRunnerResult } from './types.ts';
+import { truncateModelOutput } from './text-policy.ts';
+import type {
+    SubagentExecutionResult,
+    SubagentRunnerEvent,
+    SubagentRunnerOptions,
+} from './types.ts';
+import { usageFromEntries } from './usage.ts';
 
 export const SHUTDOWN_GRACE_MS = 3_000;
 
+export interface ChildSessionResource {
+    readonly session: AgentSession;
+    abort(): Promise<void>;
+    dispose(): Promise<void>;
+}
+
 export interface ChildSessionLifecycle {
     isShuttingDown(): boolean;
-    addActiveSession(session: AgentSession): void;
-    removeActiveSession(session: AgentSession): void;
-    trackCleanup(cleanup: Promise<void>): void;
-    holdSerialGateUntil(cleanup: Promise<void>): void;
+    adoptRuntime(runtime: AgentSessionRuntime): ChildSessionResource;
 }
 
 function createAbortError(message = 'Subagent was aborted'): Error {
@@ -84,12 +92,26 @@ function validateCanContinue(signal: AbortSignal, lifecycle: ChildSessionLifecyc
 function trustedAgentsFilesOverride(agentDir: string, projectTrusted: boolean) {
     if (projectTrusted) return undefined;
     return (base: { agentsFiles: Array<{ path: string; content: string }> }) => ({
-        // Default discovery always includes project AGENTS.md files. Preserve only
-        // trusted global context when the parent has not trusted this project.
         agentsFiles: base.agentsFiles.filter(
             (file) => dirname(resolve(file.path)) === resolve(agentDir)
         ),
     });
+}
+
+function createPersistentSessionManager(cwd: string, sessionDirectory: string): SessionManager {
+    const sessionManager = SessionManager.create(cwd, sessionDirectory);
+    const sessionFile = sessionManager.getSessionFile();
+    const header = sessionManager.getHeader();
+    if (!sessionFile || !header) {
+        throw new Error('Persistent subagent session did not expose a session header');
+    }
+
+    // SessionManager.create() reserves a path but delays creating the JSONL until
+    // the first assistant message. Materialize the header, then reopen it through
+    // the public API so SessionManager also records that the file is flushed.
+    writeFileSync(sessionFile, `${JSON.stringify(header)}\n`, { flag: 'wx' });
+    sessionManager.setSessionFile(sessionFile);
+    return sessionManager;
 }
 
 function createChildRuntime(
@@ -98,7 +120,10 @@ function createChildRuntime(
 ): Promise<AgentSessionRuntime> {
     const { modelRuntime, inheritedProvider } = inheritedRuntime;
     const agentDir = getAgentDir();
-    const sessionManager = SessionManager.inMemory(options.cwd);
+    const sessionManager = createPersistentSessionManager(
+        options.cwd,
+        options.childSessionDirectory
+    );
 
     return createAgentSessionRuntime(
         async ({
@@ -124,10 +149,6 @@ function createChildRuntime(
                 },
             });
 
-            // Child extension discovery can register the selected provider ID,
-            // replacing or composing over the inherited auth proxy. Put the same
-            // child-owned proxy back last so the parent provider snapshot remains
-            // the effective provider used by this session.
             services.modelRuntime.registerNativeProvider(inheritedProvider);
 
             return {
@@ -160,14 +181,12 @@ async function disposeLateRuntime(
     runtime: AgentSessionRuntime,
     lifecycle: ChildSessionLifecycle
 ): Promise<void> {
-    const session = runtime.session;
-    lifecycle.addActiveSession(session);
+    const resource = lifecycle.adoptRuntime(runtime);
     try {
-        await settleWithin([session.abort()], SHUTDOWN_GRACE_MS);
-        // AgentSessionRuntime emits session_shutdown before releasing the session.
-        await runtime.dispose();
+        await settleWithin([resource.abort()], SHUTDOWN_GRACE_MS);
     } finally {
-        lifecycle.removeActiveSession(session);
+        // AgentSessionRuntime emits session_shutdown before releasing the session.
+        await resource.dispose();
     }
 }
 
@@ -176,14 +195,18 @@ export async function runChildSession(
     options: SubagentRunnerOptions,
     signal: AbortSignal,
     lifecycle: ChildSessionLifecycle
-): Promise<SubagentRunnerResult> {
+): Promise<SubagentExecutionResult> {
     validateCanContinue(signal, lifecycle);
 
-    const emit = (event: SubagentRunnerEvent): void => options.onEvent?.(event);
+    const emit = (event: SubagentRunnerEvent): void => {
+        try {
+            options.onEvent?.(event);
+        } catch {
+            // Observations are best-effort and must not affect execution or cleanup.
+        }
+    };
     emit({ type: 'setup_started' });
 
-    // Parent auth resolution and ModelRuntime.create() are not abort-aware. Return
-    // cancellation promptly, but preserve serial isolation until setup settles.
     const inheritedRuntimeCreation = createInheritedModelRuntime(
         options.modelRegistry,
         options.model
@@ -193,7 +216,9 @@ export async function runChildSession(
         inheritedRuntime = await raceWithAbort(inheritedRuntimeCreation, signal);
     } catch (error) {
         if (signal.aborted) {
-            lifecycle.holdSerialGateUntil(settled(inheritedRuntimeCreation));
+            // The externally visible outcome is already cancelled by SubagentRunner.
+            // Keep this physical execution alive until non-abort-aware setup settles.
+            await settled(inheritedRuntimeCreation);
             throw createAbortError();
         }
         throw error;
@@ -208,54 +233,42 @@ export async function runChildSession(
         runtime = await raceWithAbort(runtimeCreation, signal);
     } catch (error) {
         if (signal.aborted) {
-            const lateCleanup = runtimeCreation.then(
-                (lateRuntime) => disposeLateRuntime(lateRuntime, lifecycle),
-                () => undefined
-            );
-            lifecycle.holdSerialGateUntil(lateCleanup);
+            // Do not settle the physical execution until a runtime created after
+            // cancellation has been adopted and disposed.
+            await runtimeCreation
+                .then(
+                    (lateRuntime) => disposeLateRuntime(lateRuntime, lifecycle),
+                    () => undefined
+                )
+                .catch(() => undefined);
             throw createAbortError();
         }
         throw error;
     }
 
-    const session = runtime.session;
-    lifecycle.addActiveSession(session);
-    emit({ type: 'session_ready', sessionId: session.sessionId });
-
-    let finishCleanup!: () => void;
-    const cleanupDone = new Promise<void>((resolveCleanup) => {
-        finishCleanup = resolveCleanup;
-    });
-    lifecycle.trackCleanup(cleanupDone);
-
+    const resource = lifecycle.adoptRuntime(runtime);
+    const session = resource.session;
     let lastStopReason: string | undefined;
     let lastErrorMessage: string | undefined;
     let unsubscribe = (): void => {};
     let abortPromise: Promise<void> | undefined;
-    let cleanupPromise: Promise<void> | undefined;
-    let cleanupTransferred = false;
     let executionError: unknown;
 
     const abort = () => {
-        abortPromise ??= session.abort();
+        abortPromise ??= resource.abort();
         void abortPromise.catch(() => undefined);
     };
-    const cleanupSession = (): Promise<void> =>
-        (cleanupPromise ??= (async () => {
-            try {
-                signal.removeEventListener('abort', abort);
-                if (abortPromise) await Promise.allSettled([abortPromise]);
-                unsubscribe();
-                // Runtime disposal emits child session_shutdown before releasing
-                // AgentSession resources.
-                await runtime.dispose();
-            } finally {
-                lifecycle.removeActiveSession(session);
-                finishCleanup();
-            }
-        })());
 
     try {
+        if (!session.sessionFile) {
+            throw new Error('Persistent subagent session did not expose a session file');
+        }
+        emit({
+            type: 'session_ready',
+            sessionId: session.sessionId,
+            sessionFile: session.sessionFile,
+        });
+
         signal.addEventListener('abort', abort, { once: true });
         if (signal.aborted) {
             abort();
@@ -271,17 +284,15 @@ export async function runChildSession(
             lastErrorMessage = completion.errorMessage;
         });
 
-        // Binding emits session_start/resources_discover and can run asynchronous
-        // handlers. Never dispose concurrently with a handler still mutating state.
         const binding = session.bindExtensions({});
         try {
             await raceWithAbort(binding, signal);
         } catch (error) {
             if (!signal.aborted) throw error;
 
-            cleanupTransferred = true;
-            const lateCleanup = binding.then(cleanupSession, cleanupSession);
-            lifecycle.holdSerialGateUntil(lateCleanup);
+            // Extension binding is not abort-aware. Keep the physical execution
+            // pending so disposal cannot race a handler which is still mutating state.
+            await settled(binding);
             throw createAbortError();
         }
         validateCanContinue(signal, lifecycle);
@@ -311,15 +322,22 @@ export async function runChildSession(
         executionError = signal.aborted ? createAbortError() : error;
         throw executionError;
     } finally {
-        if (!cleanupTransferred) {
-            try {
-                await cleanupSession();
-            } catch (cleanupError) {
-                // Cleanup failure should fail an otherwise successful run, but it
-                // must not hide an AbortError (or another primary execution error).
-                // biome-ignore lint/correctness/noUnsafeFinally: overriding a successful return is intentional.
-                if (executionError === undefined) throw cleanupError;
-            }
+        signal.removeEventListener('abort', abort);
+        if (abortPromise) await Promise.allSettled([abortPromise]);
+        let cleanupError: unknown;
+        try {
+            unsubscribe();
+        } catch (error) {
+            cleanupError = error;
         }
+        try {
+            await resource.dispose();
+        } catch (error) {
+            cleanupError ??= error;
+        }
+        // Cleanup failure should fail an otherwise successful run, but it must
+        // not hide an AbortError (or another primary execution error).
+        // biome-ignore lint/correctness/noUnsafeFinally: overriding a successful return is intentional.
+        if (executionError === undefined && cleanupError !== undefined) throw cleanupError;
     }
 }

@@ -2,7 +2,6 @@ import { realpath, stat } from 'node:fs/promises';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
-import { SubagentManager } from './manager.ts';
 import {
     conciseSnapshotStatus,
     renderSubagentCall,
@@ -10,6 +9,7 @@ import {
     renderSubagentWidget,
     type SubagentSharedRenderState,
 } from './render.ts';
+import { SubagentService } from './service.ts';
 
 const WIDGET_KEY = 'subagent-run';
 
@@ -59,7 +59,7 @@ async function resolveWorkingDirectory(
 }
 
 export default function subagentExtension(pi: ExtensionAPI): void {
-    const manager = new SubagentManager();
+    const service = new SubagentService();
     let uiGeneration = 0;
     let unsubscribeWidget: (() => void) | undefined;
 
@@ -69,7 +69,7 @@ export default function subagentExtension(pi: ExtensionAPI): void {
         const generation = ++uiGeneration;
         if (ctx.mode !== 'tui') return;
 
-        unsubscribeWidget = manager.subscribeRelevant(({ snapshot, queuedCount }) => {
+        unsubscribeWidget = service.subscribeRelevant(({ snapshot, queuedCount }) => {
             if (generation !== uiGeneration) return;
             if (!snapshot) {
                 ctx.ui.setWidget(WIDGET_KEY, undefined);
@@ -86,11 +86,8 @@ export default function subagentExtension(pi: ExtensionAPI): void {
     pi.registerTool({
         name: 'subagent',
         label: 'Subagent',
-        description: [
-            'Delegate one task to an isolated, general-purpose in-process Pi AgentSession through the typed SDK.',
-            'The subagent can inspect the codebase, run commands, and modify files.',
-            'Calls run serially. Final model-visible output is capped at 2,000 lines or 50 KiB, whichever is reached first.',
-        ].join(' '),
+        description:
+            'Delegate a task to an isolated, general-purpose subagent that has access to all the same tools and capabilities as the parent, excluding spawning subagents.',
         promptSnippet: 'Delegate a self-contained task to a fully capable Pi subagent',
         promptGuidelines: [
             'Use subagent for a self-contained delegated task where an isolated context is useful.',
@@ -105,7 +102,7 @@ export default function subagentExtension(pi: ExtensionAPI): void {
 
             const { cwd, inheritsParentTrust } = await resolveWorkingDirectory(params.cwd, ctx);
             const thinkingLevel = ctx.thinkingLevel ?? pi.getThinkingLevel();
-            const started = manager.startRun({
+            const started = service.start({
                 task,
                 cwd,
                 model: ctx.model,
@@ -114,7 +111,7 @@ export default function subagentExtension(pi: ExtensionAPI): void {
                 projectTrusted: ctx.isProjectTrusted() && inheritsParentTrust,
                 signal,
             });
-            const unsubscribeRun = manager.subscribeRun(started.id, (snapshot) => {
+            const unsubscribeRun = service.subscribeRun(started.id, (snapshot) => {
                 onUpdate?.({
                     content: [{ type: 'text', text: conciseSnapshotStatus(snapshot) }],
                     details: snapshot,
@@ -161,6 +158,6 @@ export default function subagentExtension(pi: ExtensionAPI): void {
         unsubscribeWidget?.();
         unsubscribeWidget = undefined;
         if (ctx.mode === 'tui') ctx.ui.setWidget(WIDGET_KEY, undefined);
-        await manager.shutdown();
+        await service.shutdown();
     });
 }

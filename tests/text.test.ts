@@ -4,7 +4,7 @@ import {
     MODEL_OUTPUT_MAX_BYTES,
     summarizeToolArguments,
     truncateModelOutput,
-} from '../src/run/text.ts';
+} from '../extensions/subagent/text-policy.ts';
 
 it('summarizes unrecognized tool arguments without exposing content fields or terminal escapes', () => {
     const summary = summarizeToolArguments('custom', {

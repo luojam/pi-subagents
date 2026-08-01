@@ -4,7 +4,7 @@
     "type": "module",
     "keywords": ["pi-package", "pi-extension", "pi", "subagent"],
     "pi": {
-        "extensions": ["./src/index.ts"]
+        "extensions": ["./extensions/subagent/index.ts"]
     },
     "peerDependencies": {
         "@earendil-works/pi-agent-core": "*",

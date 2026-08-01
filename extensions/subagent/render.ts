@@ -8,9 +8,9 @@ import {
     visibleWidth,
     wrapTextWithAnsi,
 } from '@earendil-works/pi-tui';
-import { sanitizeTerminalText } from './terminal-sanitizer.ts';
+import { sanitizeTerminalText } from './formatting/terminal-sanitizer.ts';
+import { truncateUtf8Head, truncateUtf8Tail } from './formatting/utf8.ts';
 import type { SubagentRunSnapshot, SubagentRunState, SubagentToolCallSnapshot } from './types.ts';
-import { truncateUtf8Head, truncateUtf8Tail } from './utf8.ts';
 
 const TASK_SUMMARY_MAX_BYTES = 512;
 const TOOL_SUMMARY_MAX_BYTES = 1_024;
@@ -62,7 +62,6 @@ function selectiveStyleTerminators(text: string): string {
                 // Skip semicolon-form indexed/RGB foreground color arguments.
                 if (!parameter.includes(':')) index += parameters[index + 1] === '2' ? 4 : 2;
             } else if (code === 48) {
-                // Keep the shell-owned background active, but skip its color arguments.
                 if (!parameter.includes(':')) index += parameters[index + 1] === '2' ? 4 : 2;
             } else if (
                 code === 22 ||
@@ -83,10 +82,6 @@ function selectiveStyleTerminators(text: string): string {
     return activeTerminators.size > 0 ? `\x1B[${[...activeTerminators].join(';')}m` : '';
 }
 
-/**
- * Keep the ellipsis under the truncated text's style, then selectively close that style.
- * SGR 0/49 must not be used here because the tool shell owns the background.
- */
 function truncateStyledLine(text: string, maxWidth: number, ellipsis = '…'): string {
     if (maxWidth <= 0) return '';
     if (visibleWidth(text) <= maxWidth) return text;
@@ -238,9 +233,12 @@ function stateMarker(state: SubagentRunState): string {
             return '…';
         case 'running':
             return '→';
+        case 'cancelling':
+            return '■';
         case 'completed':
             return '✓';
         case 'failed':
+        case 'interrupted':
             return '✗';
         case 'cancelled':
             return '■';
@@ -255,16 +253,18 @@ function stateColor(state: SubagentRunState): 'muted' | 'warning' | 'accent' | '
             return 'warning';
         case 'running':
             return 'accent';
+        case 'cancelling':
+            return 'warning';
         case 'completed':
             return 'success';
         case 'failed':
+        case 'interrupted':
             return 'error';
         case 'cancelled':
             return 'warning';
     }
 }
 
-/** Format the manager's bounded input summary without inspecting raw arguments. */
 export function formatToolCallSummary(tool: SubagentToolCallSnapshot): string {
     const name = boundedLine(tool.name, 128) || 'tool';
     const input = boundedLine(tool.inputSummary, TOOL_SUMMARY_MAX_BYTES);
@@ -355,13 +355,17 @@ export function isSubagentRunSnapshot(value: unknown): value is SubagentRunSnaps
     const candidate = value as Partial<SubagentRunSnapshot>;
     return (
         typeof candidate.id === 'string' &&
+        (candidate.threadId === undefined || typeof candidate.threadId === 'string') &&
         (candidate.sessionId === undefined || typeof candidate.sessionId === 'string') &&
+        (candidate.sessionFile === undefined || typeof candidate.sessionFile === 'string') &&
         (candidate.state === 'queued' ||
             candidate.state === 'starting' ||
             candidate.state === 'running' ||
+            candidate.state === 'cancelling' ||
             candidate.state === 'completed' ||
             candidate.state === 'failed' ||
-            candidate.state === 'cancelled') &&
+            candidate.state === 'cancelled' ||
+            candidate.state === 'interrupted') &&
         typeof candidate.task === 'string' &&
         typeof candidate.cwd === 'string' &&
         !!candidate.model &&
@@ -504,6 +508,7 @@ function expandedSnapshotLines(
         snapshot.model.provider && snapshot.model.id
             ? `model: ${boundedLine(`${snapshot.model.provider}/${snapshot.model.id}`, FALLBACK_MAX_BYTES)} · thinking ${boundedLine(snapshot.thinkingLevel, 128)}`
             : undefined,
+        snapshot.sessionFile ? `transcript: ${compactCwd(snapshot.sessionFile)}` : undefined,
     ].filter((line): line is string => !!line);
     addSection(lines, 'Runtime', runtime, theme, 'muted');
 
@@ -549,10 +554,19 @@ function expandedSnapshotLines(
     const stats = [contextAndElapsed, usageLine(snapshot)].filter((part): part is string => !!part);
     addSection(lines, 'Stats', stats, theme, 'dim');
 
-    if ((snapshot.state === 'failed' || snapshot.state === 'cancelled') && snapshot.error) {
+    if (
+        (snapshot.state === 'failed' ||
+            snapshot.state === 'cancelled' ||
+            snapshot.state === 'interrupted') &&
+        snapshot.error
+    ) {
         addSection(
             lines,
-            snapshot.state === 'failed' ? 'Failure' : 'Cancellation',
+            snapshot.state === 'failed'
+                ? 'Failure'
+                : snapshot.state === 'interrupted'
+                  ? 'Interruption'
+                  : 'Cancellation',
             boundedMultilineLines(snapshot.error, FALLBACK_MAX_BYTES, TASK_MAX_LINES),
             theme,
             'error'
@@ -604,7 +618,12 @@ export function renderSubagentResult(
             const withHint = hint ? `${styledStats}${theme.fg('dim', ' · ')}${hint}` : styledStats;
             const lines = [hint && visibleWidth(withHint) <= width ? withHint : styledStats];
 
-            if ((snapshot.state === 'failed' || snapshot.state === 'cancelled') && snapshot.error) {
+            if (
+                (snapshot.state === 'failed' ||
+                    snapshot.state === 'cancelled' ||
+                    snapshot.state === 'interrupted') &&
+                snapshot.error
+            ) {
                 lines.push(
                     `  ${theme.fg('error', boundedLine(snapshot.error, FALLBACK_MAX_BYTES))}`
                 );

@@ -35,7 +35,6 @@ export function providerWithInheritedAuth(provider: Provider, auth: AuthResult):
     });
 }
 
-/** Create one credential- and model-catalog-isolated runtime from the parent's effective provider. */
 export async function createInheritedModelRuntime(
     modelRegistry: ModelRegistry,
     model: SubagentModel

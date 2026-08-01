@@ -3,8 +3,8 @@ import {
     DEFAULT_MAX_LINES,
     truncateHead,
 } from '@earendil-works/pi-coding-agent';
-import { sanitizeTerminalText } from '../terminal-sanitizer.ts';
-import { truncateUtf8Head, truncateUtf8Tail } from '../utf8.ts';
+import { sanitizeTerminalText } from './formatting/terminal-sanitizer.ts';
+import { truncateUtf8Head, truncateUtf8Tail } from './formatting/utf8.ts';
 
 const TASK_MAX_BYTES = 8 * 1024;
 const PATH_MAX_BYTES = 2 * 1024;
@@ -158,8 +158,6 @@ export function truncateModelOutput(text: string): string {
     const suffix = '\n\n[Subagent output truncated to 2,000 lines or 50 KiB.]';
     const contentMaxBytes = MODEL_OUTPUT_MAX_BYTES - Buffer.byteLength(suffix, 'utf8');
     const contentTruncation = truncateHead(text, {
-        // Reserve two line breaks and the suffix itself so the complete tool result
-        // remains within Pi's limits.
         maxLines: MODEL_OUTPUT_MAX_LINES - 2,
         maxBytes: contentMaxBytes,
     });
