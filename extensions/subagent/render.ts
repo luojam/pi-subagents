@@ -21,6 +21,8 @@ const TAIL_MAX_LINES = 16;
 const COLLAPSED_MAX_COLUMNS = 100;
 const TRUNCATED_TASK_END_PADDING_COLUMNS = 3;
 
+export const SUBAGENT_TOGGLE_SHORTCUT = 'ctrl+alt+s';
+
 type ThemeColor = 'toolOutput' | 'muted' | 'dim' | 'error';
 
 // biome-ignore lint/suspicious/noControlCharactersInRegex: Parses intentional ANSI SGR sequences.
@@ -637,15 +639,18 @@ export function renderSubagentResult(
 export function renderSubagentWidget(
     snapshot: SubagentRunSnapshot | undefined,
     queuedCount: number,
+    enabled: boolean,
     theme: Theme
 ): Component {
     return new WidthSafeLines(() => {
-        if (!snapshot) {
+        const separator = theme.fg('dim', ' · ');
+        if (!enabled) {
             return [
-                [theme.fg('accent', 'subagent'), theme.fg('muted', 'idle')].join(
-                    theme.fg('dim', ' · ')
-                ),
+                [theme.fg('accent', 'subagent'), theme.fg('muted', 'disabled')].join(separator),
             ];
+        }
+        if (!snapshot) {
+            return [[theme.fg('accent', 'subagent'), theme.fg('muted', 'idle')].join(separator)];
         }
 
         const activity = snapshot.currentTool?.name ?? stateLabel(snapshot.state);
@@ -659,7 +664,7 @@ export function renderSubagentWidget(
             context ? theme.fg('muted', context) : undefined,
         ]
             .filter((part): part is string => !!part)
-            .join(theme.fg('dim', ' · '));
+            .join(separator);
         return [line + theme.fg('dim', queuedSuffix)];
     });
 }

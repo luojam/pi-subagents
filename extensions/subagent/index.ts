@@ -7,9 +7,11 @@ import {
     renderSubagentCall,
     renderSubagentResult,
     renderSubagentWidget,
+    SUBAGENT_TOGGLE_SHORTCUT,
     type SubagentSharedRenderState,
 } from './render.ts';
 import { SubagentService } from './service.ts';
+import type { SubagentRunSnapshot } from './types.ts';
 
 const WIDGET_KEY = 'subagent-run';
 
@@ -62,21 +64,50 @@ export default function subagentExtension(pi: ExtensionAPI): void {
     const service = new SubagentService();
     let uiGeneration = 0;
     let unsubscribeWidget: (() => void) | undefined;
+    let refreshWidget: (() => void) | undefined;
 
     pi.on('session_start', (_event, ctx) => {
         unsubscribeWidget?.();
         unsubscribeWidget = undefined;
+        refreshWidget = undefined;
         const generation = ++uiGeneration;
         if (ctx.mode !== 'tui') return;
 
-        unsubscribeWidget = service.subscribeRelevant(({ snapshot, queuedCount }) => {
+        let latestRun: SubagentRunSnapshot | undefined;
+        let latestQueuedCount = 0;
+        const publishWidget = () => {
             if (generation !== uiGeneration) return;
             ctx.ui.setWidget(
                 WIDGET_KEY,
-                (_tui, theme) => renderSubagentWidget(snapshot, queuedCount, theme),
+                (_tui, theme) =>
+                    renderSubagentWidget(
+                        latestRun,
+                        latestQueuedCount,
+                        pi.getActiveTools().includes('subagent'),
+                        theme
+                    ),
                 { placement: 'aboveEditor' }
             );
+        };
+        refreshWidget = publishWidget;
+        unsubscribeWidget = service.subscribeRelevant(({ snapshot, queuedCount }) => {
+            latestRun = snapshot;
+            latestQueuedCount = queuedCount;
+            publishWidget();
         });
+    });
+
+    pi.registerShortcut(SUBAGENT_TOGGLE_SHORTCUT, {
+        description: 'Enable or disable the subagent tool',
+        handler: () => {
+            const activeTools = pi.getActiveTools();
+            pi.setActiveTools(
+                activeTools.includes('subagent')
+                    ? activeTools.filter((name) => name !== 'subagent')
+                    : [...activeTools, 'subagent']
+            );
+            refreshWidget?.();
+        },
     });
 
     pi.registerTool({
@@ -153,6 +184,7 @@ export default function subagentExtension(pi: ExtensionAPI): void {
         ++uiGeneration;
         unsubscribeWidget?.();
         unsubscribeWidget = undefined;
+        refreshWidget = undefined;
         if (ctx.mode === 'tui') ctx.ui.setWidget(WIDGET_KEY, undefined);
         await service.shutdown();
     });
