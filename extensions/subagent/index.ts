@@ -71,10 +71,6 @@ export default function subagentExtension(pi: ExtensionAPI): void {
 
         unsubscribeWidget = service.subscribeRelevant(({ snapshot, queuedCount }) => {
             if (generation !== uiGeneration) return;
-            if (!snapshot) {
-                ctx.ui.setWidget(WIDGET_KEY, undefined);
-                return;
-            }
             ctx.ui.setWidget(
                 WIDGET_KEY,
                 (_tui, theme) => renderSubagentWidget(snapshot, queuedCount, theme),

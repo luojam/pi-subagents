@@ -635,11 +635,19 @@ export function renderSubagentResult(
 }
 
 export function renderSubagentWidget(
-    snapshot: SubagentRunSnapshot,
+    snapshot: SubagentRunSnapshot | undefined,
     queuedCount: number,
     theme: Theme
 ): Component {
     return new WidthSafeLines(() => {
+        if (!snapshot) {
+            return [
+                [theme.fg('accent', 'subagent'), theme.fg('muted', 'idle')].join(
+                    theme.fg('dim', ' · ')
+                ),
+            ];
+        }
+
         const activity = snapshot.currentTool?.name ?? stateLabel(snapshot.state);
         const queuedSuffix =
             queuedCount > (snapshot.state === 'queued' ? 1 : 0) ? ` · ${queuedCount} queued` : '';
