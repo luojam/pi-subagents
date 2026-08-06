@@ -9,8 +9,8 @@ import {
     summarizeToolProgress,
 } from './text-policy.ts';
 import type {
-    RelevantSubagentRun,
     RunId,
+    SubagentActivity,
     SubagentRunnerEvent,
     SubagentRunOptions,
     SubagentRunSnapshot,
@@ -366,12 +366,11 @@ export class RunStore {
         );
     }
 
-    getRelevant(): RelevantSubagentRun {
-        const active = this.getActive()[0];
-        const queued = this.getQueued();
+    getActivity(): SubagentActivity {
+        const activeRuns = this.getActive();
         return Object.freeze({
-            ...((active ?? queued[0]) ? { snapshot: active ?? queued[0] } : {}),
-            queuedCount: queued.length,
+            activeRuns,
+            queuedCount: this.getQueued().length,
         });
     }
 

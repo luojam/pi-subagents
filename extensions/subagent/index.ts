@@ -14,6 +14,9 @@ import { SubagentService } from './service.ts';
 import type { SubagentRunSnapshot } from './types.ts';
 
 const WIDGET_KEY = 'subagent-run';
+const CONCURRENCY_FLAG = 'subagent-concurrency';
+const DEFAULT_SUBAGENT_CONCURRENCY = 3;
+const MAX_SUBAGENT_CONCURRENCY = 8;
 
 const SubagentParameters = Type.Object({
     task: Type.String({ description: 'The self-contained task to delegate', minLength: 1 }),
@@ -27,6 +30,20 @@ const SubagentParameters = Type.Object({
 interface ResolvedWorkingDirectory {
     cwd: string;
     inheritsParentTrust: boolean;
+}
+
+function resolveConcurrency(value: boolean | string | undefined): number {
+    const concurrency = Number(value ?? DEFAULT_SUBAGENT_CONCURRENCY);
+    if (
+        !Number.isInteger(concurrency) ||
+        concurrency < 1 ||
+        concurrency > MAX_SUBAGENT_CONCURRENCY
+    ) {
+        throw new Error(
+            `--${CONCURRENCY_FLAG} must be an integer from 1 to ${MAX_SUBAGENT_CONCURRENCY}`
+        );
+    }
+    return concurrency;
 }
 
 function isWithinDirectory(directory: string, target: string): boolean {
@@ -61,7 +78,14 @@ async function resolveWorkingDirectory(
 }
 
 export default function subagentExtension(pi: ExtensionAPI): void {
-    const service = new SubagentService();
+    pi.registerFlag(CONCURRENCY_FLAG, {
+        description: `Maximum concurrent subagents (1-${MAX_SUBAGENT_CONCURRENCY})`,
+        type: 'string',
+        default: String(DEFAULT_SUBAGENT_CONCURRENCY),
+    });
+
+    let service: SubagentService | undefined;
+    let serviceInitializationError: unknown;
     let uiGeneration = 0;
     let unsubscribeWidget: (() => void) | undefined;
     let refreshWidget: (() => void) | undefined;
@@ -70,10 +94,22 @@ export default function subagentExtension(pi: ExtensionAPI): void {
         unsubscribeWidget?.();
         unsubscribeWidget = undefined;
         refreshWidget = undefined;
+        serviceInitializationError = undefined;
+        try {
+            service = new SubagentService({
+                concurrency: resolveConcurrency(pi.getFlag(CONCURRENCY_FLAG)),
+            });
+        } catch (error) {
+            service = undefined;
+            serviceInitializationError = error;
+            pi.setActiveTools(pi.getActiveTools().filter((name) => name !== 'subagent'));
+            throw error;
+        }
+
         const generation = ++uiGeneration;
         if (ctx.mode !== 'tui') return;
 
-        let latestRun: SubagentRunSnapshot | undefined;
+        let latestActiveRuns: readonly SubagentRunSnapshot[] = [];
         let latestQueuedCount = 0;
         const publishWidget = () => {
             if (generation !== uiGeneration) return;
@@ -81,7 +117,7 @@ export default function subagentExtension(pi: ExtensionAPI): void {
                 WIDGET_KEY,
                 (_tui, theme) =>
                     renderSubagentWidget(
-                        latestRun,
+                        latestActiveRuns,
                         latestQueuedCount,
                         pi.getActiveTools().includes('subagent'),
                         theme
@@ -90,8 +126,8 @@ export default function subagentExtension(pi: ExtensionAPI): void {
             );
         };
         refreshWidget = publishWidget;
-        unsubscribeWidget = service.subscribeRelevant(({ snapshot, queuedCount }) => {
-            latestRun = snapshot;
+        unsubscribeWidget = service.subscribeActivity(({ activeRuns, queuedCount }) => {
+            latestActiveRuns = activeRuns;
             latestQueuedCount = queuedCount;
             publishWidget();
         });
@@ -101,6 +137,10 @@ export default function subagentExtension(pi: ExtensionAPI): void {
         description: 'Enable or disable the subagent tool',
         handler: () => {
             const activeTools = pi.getActiveTools();
+            if (!service) {
+                pi.setActiveTools(activeTools.filter((name) => name !== 'subagent'));
+                return;
+            }
             pi.setActiveTools(
                 activeTools.includes('subagent')
                     ? activeTools.filter((name) => name !== 'subagent')
@@ -114,14 +154,25 @@ export default function subagentExtension(pi: ExtensionAPI): void {
         name: 'subagent',
         label: 'Subagent',
         description:
-            'Delegate a task to an isolated, general-purpose subagent that has access to all the same tools and capabilities as the parent, excluding spawning subagents.',
+            'Delegate a task to a general-purpose subagent that has access to all the same tools and capabilities as the parent, excluding spawning subagents. Independent sibling subagent calls can execute concurrently.',
         promptSnippet: 'Delegate a self-contained task to a fully capable Pi subagent',
         promptGuidelines: [
             'Use subagent for a self-contained delegated task where an isolated context is useful.',
+            'Emit independent subagent calls together in one turn; wait for their results and use a later turn for dependent tasks.',
+            'Favor parallel subagent calls for independent research, exploration, review, tests, or work in disjoint modules.',
+            'Do not parallelize subagent calls that may write the same files or contend for shared mutable resources.',
         ],
         parameters: SubagentParameters,
+        executionMode: 'parallel',
 
         async execute(_toolCallId, params, signal, onUpdate, ctx) {
+            const currentService = service;
+            if (!currentService) {
+                if (serviceInitializationError instanceof Error) {
+                    throw serviceInitializationError;
+                }
+                throw new Error('Subagent service is not initialized');
+            }
             const task = params.task.trim();
             if (!task) throw new Error('Subagent task must not be empty');
             if (!ctx.model)
@@ -129,7 +180,7 @@ export default function subagentExtension(pi: ExtensionAPI): void {
 
             const { cwd, inheritsParentTrust } = await resolveWorkingDirectory(params.cwd, ctx);
             const thinkingLevel = ctx.thinkingLevel ?? pi.getThinkingLevel();
-            const started = service.start({
+            const started = currentService.start({
                 task,
                 cwd,
                 model: ctx.model,
@@ -138,7 +189,7 @@ export default function subagentExtension(pi: ExtensionAPI): void {
                 projectTrusted: ctx.isProjectTrusted() && inheritsParentTrust,
                 signal,
             });
-            const unsubscribeRun = service.subscribeRun(started.id, (snapshot) => {
+            const unsubscribeRun = currentService.subscribeRun(started.id, (snapshot) => {
                 onUpdate?.({
                     content: [{ type: 'text', text: conciseSnapshotStatus(snapshot) }],
                     details: snapshot,
@@ -186,6 +237,8 @@ export default function subagentExtension(pi: ExtensionAPI): void {
         unsubscribeWidget = undefined;
         refreshWidget = undefined;
         if (ctx.mode === 'tui') ctx.ui.setWidget(WIDGET_KEY, undefined);
-        await service.shutdown();
+        const currentService = service;
+        service = undefined;
+        await currentService?.shutdown();
     });
 }

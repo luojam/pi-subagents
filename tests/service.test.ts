@@ -72,6 +72,7 @@ it('admits queued runs FIFO only after physical capacity is released', async () 
     const runners: ControlledRunner[] = [];
     let nextId = 1;
     const service = new SubagentService({
+        concurrency: 1,
         createId: () => `run-${nextId++}`,
         childSessionDirectory: '/sessions',
         runnerFactory: () => {
@@ -103,6 +104,48 @@ it('admits queued runs FIFO only after physical capacity is released', async () 
 
     runners[1].outcome.resolve({ text: 'third done', usage });
     runners[1].release.resolve();
+    await expect(third.result).resolves.toMatchObject({ text: 'third done' });
+    await service.shutdown();
+});
+
+it('admits up to the concurrency limit and waits for physical release before refilling', async () => {
+    const runners: ControlledRunner[] = [];
+    let nextId = 1;
+    const service = new SubagentService({
+        concurrency: 2,
+        createId: () => `run-${nextId++}`,
+        childSessionDirectory: '/sessions',
+        runnerFactory: () => {
+            const runner = new ControlledRunner();
+            runners.push(runner);
+            return runner;
+        },
+    });
+
+    const first = service.start(request('first'));
+    const second = service.start(request('second'));
+    const third = service.start(request('third'));
+
+    expect(runners).toHaveLength(2);
+    expect(runners.map((runner) => runner.options?.task)).toEqual(['first', 'second']);
+    expect(service.get(third.id)?.state).toBe('queued');
+
+    runners[0].outcome.resolve({ text: 'first done', usage });
+    await expect(first.result).resolves.toMatchObject({ text: 'first done' });
+    await flushPromises();
+    expect(runners).toHaveLength(2);
+    expect(service.get(third.id)?.state).toBe('queued');
+
+    runners[0].release.resolve();
+    await flushPromises();
+    expect(runners).toHaveLength(3);
+    expect(runners[2].options?.task).toBe('third');
+
+    runners[1].outcome.resolve({ text: 'second done', usage });
+    runners[1].release.resolve();
+    runners[2].outcome.resolve({ text: 'third done', usage });
+    runners[2].release.resolve();
+    await expect(second.result).resolves.toMatchObject({ text: 'second done' });
     await expect(third.result).resolves.toMatchObject({ text: 'third done' });
     await service.shutdown();
 });

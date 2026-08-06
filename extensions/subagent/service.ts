@@ -4,8 +4,8 @@ import { getAgentDir } from '@earendil-works/pi-coding-agent';
 import { isTerminalRunState, RunStore, type RunStoreOptions } from './run-store.ts';
 import { SubagentRunner } from './runner.ts';
 import type {
-    RelevantSubagentRun,
     RunId,
+    SubagentActivity,
     SubagentExecutionHandle,
     SubagentRunHandle,
     SubagentRunnerOptions,
@@ -47,7 +47,7 @@ export interface SubagentServiceOptions extends RunStoreOptions {
 }
 
 type RunListener = (snapshot: SubagentRunSnapshot) => void;
-type RelevantListener = (run: RelevantSubagentRun) => void;
+type ActivityListener = (activity: SubagentActivity) => void;
 
 function deferred<T>(): Deferred<T> {
     let resolvePromise!: (value: T) => void;
@@ -187,10 +187,10 @@ export class SubagentService {
         return this.store.subscribeRun(id, listener);
     }
 
-    subscribeRelevant(listener: RelevantListener): () => void {
+    subscribeActivity(listener: ActivityListener): () => void {
         const publish = () => {
             try {
-                listener(this.store.getRelevant());
+                listener(this.store.getActivity());
             } catch {
                 // UI publication is best-effort.
             }

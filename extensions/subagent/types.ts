@@ -145,7 +145,7 @@ export interface SubagentRunHandle {
     cancel(): boolean;
 }
 
-export interface RelevantSubagentRun {
-    readonly snapshot?: SubagentRunSnapshot;
+export interface SubagentActivity {
+    readonly activeRuns: readonly SubagentRunSnapshot[];
     readonly queuedCount: number;
 }

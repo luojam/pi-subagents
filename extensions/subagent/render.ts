@@ -637,7 +637,7 @@ export function renderSubagentResult(
 }
 
 export function renderSubagentWidget(
-    snapshot: SubagentRunSnapshot | undefined,
+    activeRuns: readonly SubagentRunSnapshot[],
     queuedCount: number,
     enabled: boolean,
     theme: Theme
@@ -649,22 +649,19 @@ export function renderSubagentWidget(
                 [theme.fg('accent', 'subagent'), theme.fg('muted', 'disabled')].join(separator),
             ];
         }
-        if (!snapshot) {
+        if (activeRuns.length === 0 && queuedCount === 0) {
             return [[theme.fg('accent', 'subagent'), theme.fg('muted', 'idle')].join(separator)];
         }
 
-        const activity = snapshot.currentTool?.name ?? stateLabel(snapshot.state);
-        const queuedSuffix =
-            queuedCount > (snapshot.state === 'queued' ? 1 : 0) ? ` · ${queuedCount} queued` : '';
-        const context = formatContext(snapshot, false);
-        const line = [
+        const representative = activeRuns[0];
+        const activity = representative?.currentTool?.name;
+        const parts = [
             theme.fg('accent', 'subagent'),
-            theme.fg(stateColor(snapshot.state), boundedLine(activity, 128)),
-            theme.fg('dim', formatElapsed(snapshot.elapsedMs)),
-            context ? theme.fg('muted', context) : undefined,
-        ]
-            .filter((part): part is string => !!part)
-            .join(separator);
-        return [line + theme.fg('dim', queuedSuffix)];
+            activeRuns.length > 0 ? theme.fg('accent', `${activeRuns.length} active`) : undefined,
+            activity ? theme.fg('muted', boundedLine(activity, 128)) : undefined,
+            representative ? theme.fg('dim', formatElapsed(representative.elapsedMs)) : undefined,
+            queuedCount > 0 ? theme.fg('dim', `${queuedCount} queued`) : undefined,
+        ].filter((part): part is string => !!part);
+        return [parts.join(separator)];
     });
 }
