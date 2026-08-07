@@ -2,6 +2,7 @@ import { realpath, stat } from 'node:fs/promises';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
+import { openSubagentsModal } from './modal.ts';
 import {
     conciseSnapshotStatus,
     renderSubagentCall,
@@ -157,6 +158,14 @@ export default function subagentExtension(pi: ExtensionAPI): void {
 
     pi.on('thinking_level_select', () => refreshWidget?.());
     pi.on('model_select', () => refreshWidget?.());
+
+    pi.registerCommand('subagents', {
+        description: 'Open subagent management',
+        handler: async (_args, ctx) => {
+            if (ctx.mode !== 'tui') return;
+            await openSubagentsModal(ctx);
+        },
+    });
 
     pi.registerShortcut(SUBAGENT_TOGGLE_SHORTCUT, {
         description: 'Enable or disable the subagent tool',
