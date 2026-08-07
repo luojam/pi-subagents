@@ -98,6 +98,7 @@ export default function subagentExtension(pi: ExtensionAPI): void {
     });
 
     let configuredThinkingLevel: ConfiguredSubagentThinkingLevel = 'inherit';
+    let configuredConcurrency = DEFAULT_SUBAGENT_CONCURRENCY;
     let service: SubagentService | undefined;
     let serviceInitializationError: unknown;
     let uiGeneration = 0;
@@ -110,11 +111,11 @@ export default function subagentExtension(pi: ExtensionAPI): void {
         refreshWidget = undefined;
         serviceInitializationError = undefined;
         try {
-            const concurrency = resolveConcurrency(pi.getFlag(CONCURRENCY_FLAG));
+            configuredConcurrency = resolveConcurrency(pi.getFlag(CONCURRENCY_FLAG));
             configuredThinkingLevel = resolveSubagentThinkingConfiguration(
                 pi.getFlag(THINKING_FLAG)
             );
-            service = new SubagentService({ concurrency });
+            service = new SubagentService({ concurrency: configuredConcurrency });
         } catch (error) {
             service = undefined;
             serviceInitializationError = error;
@@ -163,7 +164,19 @@ export default function subagentExtension(pi: ExtensionAPI): void {
         description: 'Open subagent management',
         handler: async (_args, ctx) => {
             if (ctx.mode !== 'tui') return;
-            await openSubagentsModal(ctx, service);
+            await openSubagentsModal(ctx, service, {
+                thinkingLevel: configuredThinkingLevel,
+                maxParallelism: configuredConcurrency,
+                maxParallelismLimit: MAX_SUBAGENT_CONCURRENCY,
+                onThinkingLevelChange: (thinkingLevel) => {
+                    configuredThinkingLevel = thinkingLevel;
+                    refreshWidget?.();
+                },
+                onMaxParallelismChange: (maxParallelism) => {
+                    service?.setConcurrency(maxParallelism);
+                    configuredConcurrency = maxParallelism;
+                },
+            });
         },
     });
 

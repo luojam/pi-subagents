@@ -28,6 +28,7 @@ interface Deferred<T> {
 interface PendingRun {
     readonly request: SubagentRunOptions;
     readonly result: Deferred<SubagentRunResult>;
+    abortRequested: boolean;
     removeAbortListener(): void;
 }
 
@@ -69,12 +70,18 @@ function isAbortError(error: unknown): boolean {
     return error instanceof Error && error.name === 'AbortError';
 }
 
+function validateConcurrency(concurrency: number): void {
+    if (!Number.isInteger(concurrency) || concurrency < 1) {
+        throw new Error('Subagent concurrency must be a positive integer');
+    }
+}
+
 /** Owns the logical queue and admits one Runner per available execution slot. */
 export class SubagentService {
     private readonly store: RunStore;
     private readonly pendingRuns = new Map<RunId, PendingRun>();
     private readonly activeExecutions = new Map<RunId, ActiveExecution>();
-    private readonly concurrency: number;
+    private concurrency: number;
     private readonly createId: () => RunId;
     private readonly childSessionDirectory: string;
     private readonly runnerFactory: () => ExecutionRunner;
@@ -84,9 +91,7 @@ export class SubagentService {
 
     constructor(options: SubagentServiceOptions = {}) {
         const concurrency = options.concurrency ?? 1;
-        if (!Number.isInteger(concurrency) || concurrency < 1) {
-            throw new Error('Subagent concurrency must be a positive integer');
-        }
+        validateConcurrency(concurrency);
         this.concurrency = concurrency;
         this.createId = options.createId ?? randomUUID;
         this.childSessionDirectory =
@@ -105,6 +110,12 @@ export class SubagentService {
         return this.start(options).result;
     }
 
+    setConcurrency(concurrency: number): void {
+        validateConcurrency(concurrency);
+        this.concurrency = concurrency;
+        this.drainQueue();
+    }
+
     start(options: SubagentRunOptions): SubagentRunHandle {
         if (this.disposed) {
             return {
@@ -121,25 +132,34 @@ export class SubagentService {
         const pending: PendingRun = {
             request: options,
             result,
+            abortRequested: false,
             removeAbortListener: () => removeAbortListener(),
         };
         this.pendingRuns.set(id, pending);
+
+        // Install and check cancellation before publishing the queued run. Store
+        // subscribers are synchronous and may increase concurrency while it is published.
+        if (options.signal) {
+            const onAbort = () => {
+                pending.abortRequested = true;
+                this.cancel(id);
+            };
+            options.signal.addEventListener('abort', onAbort, { once: true });
+            removeAbortListener = () => options.signal?.removeEventListener('abort', onAbort);
+            if (options.signal.aborted) pending.abortRequested = true;
+        }
+
         try {
             this.store.create(id, options);
         } catch (error) {
+            pending.removeAbortListener();
             this.pendingRuns.delete(id);
             throw error;
         }
 
         // A synchronous store subscriber may cancel the newly published queued run.
         if (this.pendingRuns.has(id)) {
-            if (options.signal) {
-                const onAbort = () => this.cancel(id);
-                options.signal.addEventListener('abort', onAbort, { once: true });
-                removeAbortListener = () => options.signal?.removeEventListener('abort', onAbort);
-            }
-
-            if (options.signal?.aborted) this.cancel(id);
+            if (pending.abortRequested) this.cancel(id);
             else this.drainQueue();
         }
 
@@ -255,6 +275,10 @@ export class SubagentService {
                         type: 'interrupted',
                         error: 'Queued subagent request was unavailable',
                     });
+                    continue;
+                }
+                if (pending.abortRequested) {
+                    this.cancel(snapshot.id);
                     continue;
                 }
                 this.admit(snapshot.id, pending);

@@ -150,6 +150,133 @@ it('admits up to the concurrency limit and waits for physical release before ref
     await service.shutdown();
 });
 
+it('does not admit an aborted run when a queued subscriber increases concurrency', async () => {
+    const runners: ControlledRunner[] = [];
+    let nextId = 1;
+    const service = new SubagentService({
+        concurrency: 1,
+        createId: () => `run-${nextId++}`,
+        childSessionDirectory: '/sessions',
+        runnerFactory: () => {
+            const runner = new ControlledRunner();
+            runners.push(runner);
+            return runner;
+        },
+    });
+
+    const active = service.start(request('active'));
+    const controller = new AbortController();
+    controller.abort();
+    service.subscribe((snapshot) => {
+        if (snapshot.task === 'already aborted' && snapshot.state === 'queued') {
+            service.setConcurrency(2);
+        }
+    });
+
+    const aborted = service.start({ ...request('already aborted'), signal: controller.signal });
+
+    expect(runners).toHaveLength(1);
+    expect(service.get(aborted.id)?.state).toBe('cancelled');
+    await expect(aborted.result).rejects.toMatchObject({ name: 'AbortError' });
+
+    runners[0].outcome.resolve({ text: 'done', usage });
+    runners[0].release.resolve();
+    await active.result;
+    await service.shutdown();
+});
+
+it('immediately admits queued runs when concurrency increases', async () => {
+    const runners: ControlledRunner[] = [];
+    let nextId = 1;
+    const service = new SubagentService({
+        concurrency: 1,
+        createId: () => `run-${nextId++}`,
+        childSessionDirectory: '/sessions',
+        runnerFactory: () => {
+            const runner = new ControlledRunner();
+            runners.push(runner);
+            return runner;
+        },
+    });
+
+    const runs = [
+        service.start(request('first')),
+        service.start(request('second')),
+        service.start(request('third')),
+    ];
+    expect(runners).toHaveLength(1);
+
+    service.setConcurrency(3);
+
+    expect(runners).toHaveLength(3);
+    expect(runners.map((runner) => runner.options?.task)).toEqual(['first', 'second', 'third']);
+    for (const runner of runners) {
+        runner.outcome.resolve({ text: 'done', usage });
+        runner.release.resolve();
+    }
+    await Promise.all(runs.map((run) => run.result));
+    await service.shutdown();
+});
+
+it('does not cancel or replace active runs when concurrency decreases', async () => {
+    const runners: ControlledRunner[] = [];
+    let nextId = 1;
+    const service = new SubagentService({
+        concurrency: 3,
+        createId: () => `run-${nextId++}`,
+        childSessionDirectory: '/sessions',
+        runnerFactory: () => {
+            const runner = new ControlledRunner();
+            runners.push(runner);
+            return runner;
+        },
+    });
+
+    const activeRuns = [
+        service.start(request('first')),
+        service.start(request('second')),
+        service.start(request('third')),
+    ];
+    const queued = service.start(request('queued'));
+    expect(runners).toHaveLength(3);
+
+    service.setConcurrency(1);
+
+    expect(runners.every((runner) => runner.options?.signal?.aborted === false)).toBe(true);
+    runners[0].release.resolve();
+    await flushPromises();
+    expect(runners).toHaveLength(3);
+    expect(service.get(queued.id)?.state).toBe('queued');
+
+    runners[1].release.resolve();
+    await flushPromises();
+    expect(runners).toHaveLength(3);
+    expect(service.get(queued.id)?.state).toBe('queued');
+
+    runners[2].release.resolve();
+    await flushPromises();
+    expect(runners).toHaveLength(4);
+    expect(runners[3].options?.task).toBe('queued');
+
+    for (const runner of runners) {
+        runner.outcome.resolve({ text: 'done', usage });
+        runner.release.resolve();
+    }
+    await Promise.all([...activeRuns, queued].map((run) => run.result));
+    await service.shutdown();
+});
+
+it('rejects invalid concurrency reconfiguration', async () => {
+    const service = new SubagentService();
+
+    expect(() => service.setConcurrency(0)).toThrow('positive integer');
+    expect(() => service.setConcurrency(-1)).toThrow('positive integer');
+    expect(() => service.setConcurrency(1.5)).toThrow('positive integer');
+    expect(() => service.setConcurrency(Number.NaN)).toThrow('positive integer');
+
+    await service.shutdown();
+});
+
 it('registers an admitted runner before a synchronous subscriber can shut down', async () => {
     const outcome = deferred<SubagentExecutionResult>();
     const release = deferred<void>();
