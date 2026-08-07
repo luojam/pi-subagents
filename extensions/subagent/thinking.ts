@@ -15,6 +15,7 @@ const THINKING_LEVEL_ORDER: readonly SubagentThinkingLevel[] = [
 ];
 
 export type ConfiguredSubagentThinkingLevel = (typeof SUBAGENT_THINKING_LEVELS)[number];
+export type DisplayedSubagentThinkingLevel = SubagentThinkingLevel | 'unsupported';
 
 export function resolveSubagentThinkingConfiguration(
     value: boolean | string | undefined
@@ -53,4 +54,17 @@ export function resolveSubagentThinkingLevel(
     throw new Error(
         `${model.provider}/${model.id} does not support a subagent thinking level at or below ${MAX_INHERITED_SUBAGENT_THINKING_LEVEL}`
     );
+}
+
+/** Best-effort resolution for status UI; execution still uses the strict resolver above. */
+export function resolveDisplayedSubagentThinkingLevel(
+    configured: ConfiguredSubagentThinkingLevel,
+    model: SubagentModel,
+    inherited: SubagentThinkingLevel
+): DisplayedSubagentThinkingLevel {
+    try {
+        return resolveSubagentThinkingLevel(configured, model, inherited);
+    } catch {
+        return 'unsupported';
+    }
 }

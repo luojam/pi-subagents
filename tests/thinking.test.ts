@@ -1,5 +1,6 @@
 import { expect, it } from 'vitest';
 import {
+    resolveDisplayedSubagentThinkingLevel,
     resolveSubagentThinkingConfiguration,
     resolveSubagentThinkingLevel,
 } from '../extensions/subagent/thinking.ts';
@@ -54,6 +55,9 @@ it('rejects inheritance when the model has no supported level at or below high',
     });
     expect(() => resolveSubagentThinkingLevel(configured, selectedModel, 'high')).toThrow(
         'test/test-model does not support a subagent thinking level at or below high'
+    );
+    expect(resolveDisplayedSubagentThinkingLevel(configured, selectedModel, 'high')).toBe(
+        'unsupported'
     );
 });
 

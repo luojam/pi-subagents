@@ -13,6 +13,7 @@ import {
 import { SubagentService } from './service.ts';
 import {
     type ConfiguredSubagentThinkingLevel,
+    resolveDisplayedSubagentThinkingLevel,
     resolveSubagentThinkingConfiguration,
     resolveSubagentThinkingLevel,
 } from './thinking.ts';
@@ -134,6 +135,13 @@ export default function subagentExtension(pi: ExtensionAPI): void {
                         latestActiveRuns,
                         latestQueuedCount,
                         pi.getActiveTools().includes('subagent'),
+                        ctx.model
+                            ? resolveDisplayedSubagentThinkingLevel(
+                                  configuredThinkingLevel,
+                                  ctx.model,
+                                  ctx.thinkingLevel ?? pi.getThinkingLevel()
+                              )
+                            : configuredThinkingLevel,
                         theme
                     ),
                 { placement: 'aboveEditor' }
@@ -146,6 +154,9 @@ export default function subagentExtension(pi: ExtensionAPI): void {
             publishWidget();
         });
     });
+
+    pi.on('thinking_level_select', () => refreshWidget?.());
+    pi.on('model_select', () => refreshWidget?.());
 
     pi.registerShortcut(SUBAGENT_TOGGLE_SHORTCUT, {
         description: 'Enable or disable the subagent tool',

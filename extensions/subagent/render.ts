@@ -640,26 +640,32 @@ export function renderSubagentWidget(
     activeRuns: readonly SubagentRunSnapshot[],
     queuedCount: number,
     enabled: boolean,
+    idleThinkingLevel: SubagentRunSnapshot['thinkingLevel'] | 'inherit' | 'unsupported',
     theme: Theme
 ): Component {
     return new WidthSafeLines(() => {
         const separator = theme.fg('dim', ' · ');
+        const name = theme.fg('accent', 'subagent');
+        const representative = activeRuns[0];
+        const displayedThinkingLevel = representative
+            ? activeRuns.every((run) => run.thinkingLevel === representative.thinkingLevel)
+                ? representative.thinkingLevel
+                : 'mixed'
+            : idleThinkingLevel;
+        const thinking = theme.fg('dim', `thinking ${boundedLine(displayedThinkingLevel, 128)}`);
         if (!enabled) {
-            return [
-                [theme.fg('accent', 'subagent'), theme.fg('muted', 'disabled')].join(separator),
-            ];
+            return [[name, theme.fg('muted', 'disabled'), thinking].join(separator)];
         }
         if (activeRuns.length === 0 && queuedCount === 0) {
-            return [[theme.fg('accent', 'subagent'), theme.fg('muted', 'idle')].join(separator)];
+            return [[name, theme.fg('muted', 'idle'), thinking].join(separator)];
         }
 
-        const representative = activeRuns[0];
         const activity = representative?.currentTool?.name;
         const parts = [
-            theme.fg('accent', 'subagent'),
+            name,
             activeRuns.length > 0 ? theme.fg('accent', `${activeRuns.length} active`) : undefined,
             activity ? theme.fg('muted', boundedLine(activity, 128)) : undefined,
-            representative ? theme.fg('dim', formatElapsed(representative.elapsedMs)) : undefined,
+            thinking,
             queuedCount > 0 ? theme.fg('dim', `${queuedCount} queued`) : undefined,
         ].filter((part): part is string => !!part);
         return [parts.join(separator)];
