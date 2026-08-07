@@ -163,7 +163,7 @@ export default function subagentExtension(pi: ExtensionAPI): void {
         description: 'Open subagent management',
         handler: async (_args, ctx) => {
             if (ctx.mode !== 'tui') return;
-            await openSubagentsModal(ctx);
+            await openSubagentsModal(ctx, service);
         },
     });
 
