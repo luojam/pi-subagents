@@ -11,10 +11,16 @@ import {
     type SubagentSharedRenderState,
 } from './render.ts';
 import { SubagentService } from './service.ts';
+import {
+    type ConfiguredSubagentThinkingLevel,
+    resolveSubagentThinkingConfiguration,
+    resolveSubagentThinkingLevel,
+} from './thinking.ts';
 import type { SubagentRunSnapshot } from './types.ts';
 
 const WIDGET_KEY = 'subagent-run';
 const CONCURRENCY_FLAG = 'subagent-concurrency';
+const THINKING_FLAG = 'subagent-thinking';
 const DEFAULT_SUBAGENT_CONCURRENCY = 3;
 const MAX_SUBAGENT_CONCURRENCY = 8;
 
@@ -83,7 +89,13 @@ export default function subagentExtension(pi: ExtensionAPI): void {
         type: 'string',
         default: String(DEFAULT_SUBAGENT_CONCURRENCY),
     });
+    pi.registerFlag(THINKING_FLAG, {
+        description: 'Subagent thinking level (inherit, low, medium, or high)',
+        type: 'string',
+        default: 'inherit',
+    });
 
+    let configuredThinkingLevel: ConfiguredSubagentThinkingLevel = 'inherit';
     let service: SubagentService | undefined;
     let serviceInitializationError: unknown;
     let uiGeneration = 0;
@@ -96,9 +108,11 @@ export default function subagentExtension(pi: ExtensionAPI): void {
         refreshWidget = undefined;
         serviceInitializationError = undefined;
         try {
-            service = new SubagentService({
-                concurrency: resolveConcurrency(pi.getFlag(CONCURRENCY_FLAG)),
-            });
+            const concurrency = resolveConcurrency(pi.getFlag(CONCURRENCY_FLAG));
+            configuredThinkingLevel = resolveSubagentThinkingConfiguration(
+                pi.getFlag(THINKING_FLAG)
+            );
+            service = new SubagentService({ concurrency });
         } catch (error) {
             service = undefined;
             serviceInitializationError = error;
@@ -179,7 +193,11 @@ export default function subagentExtension(pi: ExtensionAPI): void {
                 throw new Error('Cannot start a subagent without an active parent model');
 
             const { cwd, inheritsParentTrust } = await resolveWorkingDirectory(params.cwd, ctx);
-            const thinkingLevel = ctx.thinkingLevel ?? pi.getThinkingLevel();
+            const thinkingLevel = resolveSubagentThinkingLevel(
+                configuredThinkingLevel,
+                ctx.model,
+                ctx.thinkingLevel ?? pi.getThinkingLevel()
+            );
             const started = currentService.start({
                 task,
                 cwd,

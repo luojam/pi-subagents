@@ -1,3 +1,7 @@
+## General
+
+- Do not forcibly stage files that are gitignored.
+
 ## Tests
 
 - Add only essential, high-impact tests that verify core behavior and critical edge cases.

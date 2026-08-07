@@ -17,6 +17,16 @@ pi -e ./extensions/subagent/index.ts --subagent-concurrency 4
 
 The accepted range is `1` through `8`. Use `--subagent-concurrency 1` to force serial execution.
 
+## Thinking
+
+Subagents inherit the parent's effective thinking level by default. To set one process-wide level for every subagent, use:
+
+```bash
+pi -e ./extensions/subagent/index.ts --subagent-thinking high
+```
+
+Accepted values are `inherit`, `low`, `medium`, and `high`. `inherit` is the default and resolves the parent's current effective level when each tool call executes, capped at the code-level maximum of `high`, so parent model or thinking changes during the session are respected without inheriting `xhigh` or `max`. An explicit value overrides the parent level. In both cases, the requested level is clamped to the selected model's capabilities; run snapshots and child sessions use the resulting effective level.
+
 The tool still delegates one task per call. Pi executes sibling tool calls in parallel, so the parent model controls dependencies through when it emits calls:
 
 1. Emit independent subagent calls together in one assistant turn.
