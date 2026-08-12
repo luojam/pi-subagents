@@ -17,6 +17,10 @@ pi -e ./extensions/subagent/index.ts --subagent-concurrency 4
 
 The accepted range is `1` through `8`. Use `--subagent-concurrency 1` to force serial execution.
 
+## Availability
+
+Use `/subagents` or press `Ctrl+Alt+S` in the TUI to open subagent management, where you can enable or disable the subagent tool. Disabling the tool prevents new calls without cancelling active or queued subagents.
+
 ## Thinking
 
 Subagents inherit the parent's effective thinking level by default. Use `/subagents` in the TUI to choose `inherit`, `low`, `medium`, `high`, `xhigh`, or `max`, or press `Ctrl+Alt+R` to cycle through those options; there is no command-line reasoning-level setting. `inherit` resolves the parent's current effective level without an extension-level cap, so parent model or thinking changes during the session are respected. An explicit value overrides the parent level. In both cases, the requested level is clamped to the selected model's capabilities; run snapshots and child sessions use the resulting effective level.

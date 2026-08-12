@@ -52,13 +52,15 @@ class TestRunSource implements SubagentRunSource {
 function setup(
     source: SubagentRunSource,
     options: SubagentsModalOptions = {
+        enabled: true,
         maxParallelism: 3,
         maxParallelismLimit: 8,
+        onEnabledChange: () => {},
         onThinkingLevelChange: () => {},
         onMaxParallelismChange: () => {},
     },
     customKeybindings?: KeybindingsManager,
-    terminalRows = 16
+    terminalRows = 18
 ) {
     const requestRender = vi.fn();
     const tui = {
@@ -103,13 +105,26 @@ it('lists only active and queued runs and moves the selected row', () => {
 
     let lines = modal.render(80);
     expect(lines.join('\n')).toContain('Configuration');
+    expect(lines.join('\n')).toContain('Subagent tool    ‹ enabled ›');
     expect(lines.join('\n')).toContain('Reasoning level  ‹ inherit ›');
     expect(lines.join('\n')).toContain('Max parallelism  ‹ 3 ›');
+    const settingRows = ['Subagent tool', 'Reasoning level', 'Max parallelism'].map(
+        (label) => lines.find((line) => line.includes(label)) ?? ''
+    );
+    expect(new Set(settingRows.map((line) => line.indexOf('‹'))).size).toBe(1);
     expect(lines.join('\n')).toContain('1 active');
     expect(lines.join('\n')).toContain('1 queued');
     expect(lines.join('\n')).toContain('inspect active work');
     expect(lines.join('\n')).toContain('wait for a slot');
     expect(lines.join('\n')).not.toContain('already finished');
+    const emptyPaddedRow = `│${' '.repeat(78)}│`;
+    const maxParallelismRow = lines.findIndex((line) => line.includes('Max parallelism'));
+    expect(lines.slice(maxParallelismRow + 1, maxParallelismRow + 4)).toEqual([
+        emptyPaddedRow,
+        `│ ${'─'.repeat(76)} │`,
+        emptyPaddedRow,
+    ]);
+    expect(lines.find((line) => line.includes('Reasoning level'))).toMatch(/^│ .* │$/u);
     expect(lines.every((line) => !line.includes('\n') && visibleWidth(line) <= 80)).toBe(true);
     expect(lines.find((line) => line.includes('inspect active work'))).toContain('\x1b[7m');
 
@@ -121,9 +136,10 @@ it('lists only active and queued runs and moves the selected row', () => {
 
     modal.handleInput('tui.input.tab');
     lines = modal.render(80);
-    expect(lines.find((line) => line.includes('Reasoning level'))).toContain('\x1b[7m');
+    expect(lines.find((line) => line.includes('Subagent tool'))).toContain('\x1b[7m');
     expect(lines.find((line) => line.includes('wait for a slot'))).not.toContain('\x1b[7m');
 
+    modal.handleInput('tui.select.down');
     modal.handleInput('tui.select.down');
     modal.handleInput('\x1b[C');
     lines = modal.render(80);
@@ -139,6 +155,36 @@ it('lists only active and queued runs and moves the selected row', () => {
     expect(source.listeners.size).toBe(0);
 });
 
+it('closes when the modal shortcut is pressed again', () => {
+    const source = new TestRunSource([]);
+    const { close, modal } = setup(source);
+
+    modal.handleInput('\x1b\x13');
+
+    expect(close).toHaveBeenCalledOnce();
+    expect(source.listeners.size).toBe(0);
+});
+
+it('keeps rendered rows within extremely narrow widths', () => {
+    const { modal } = setup(new TestRunSource([]));
+
+    for (const width of [2, 3]) {
+        expect(modal.render(width).every((line) => visibleWidth(line) === width)).toBe(true);
+    }
+});
+
+it('renders every control at the minimum full modal height', () => {
+    const { modal } = setup(new TestRunSource([]), undefined, undefined, 16);
+    const lines = modal.render(80);
+
+    expect(lines).toHaveLength(14);
+    expect(lines.join('\n')).toContain('Subagent tool');
+    expect(lines.join('\n')).toContain('Reasoning level');
+    expect(lines.join('\n')).toContain('Max parallelism');
+    expect(lines.join('\n')).toContain('Activity');
+    expect(lines.join('\n')).not.toContain('Terminal too small');
+});
+
 it('uses only the configured section keybinding and reports when it is unbound', () => {
     const source = new TestRunSource([run('active', 'running')]);
     const reboundKeybindings = {
@@ -151,7 +197,7 @@ it('uses only the configured section keybinding and reports when it is unbound',
     modal.handleInput('\t');
     expect(modal.render(80).find((line) => line.includes('active task'))).toContain('\x1b[7m');
     modal.handleInput('ctrl+t');
-    expect(modal.render(80).find((line) => line.includes('Reasoning level'))).toContain('\x1b[7m');
+    expect(modal.render(80).find((line) => line.includes('Subagent tool'))).toContain('\x1b[7m');
 
     const unboundKeybindings = {
         matches: () => false,
@@ -164,14 +210,17 @@ it('uses only the configured section keybinding and reports when it is unbound',
     expect(unboundLines.join('\n')).toContain('section unbound');
 });
 
-it('applies reasoning and parallelism changes through independent callbacks', () => {
+it('applies enabled, reasoning, and parallelism changes through independent callbacks', () => {
     const source = new TestRunSource([]);
+    const onEnabledChange = vi.fn();
     const onThinkingLevelChange = vi.fn();
     const onMaxParallelismChange = vi.fn();
     const { modal } = setup(source, {
+        enabled: true,
         thinkingLevel: 'inherit',
         maxParallelism: 3,
         maxParallelismLimit: 8,
+        onEnabledChange,
         onThinkingLevelChange,
         onMaxParallelismChange,
     });
@@ -181,6 +230,14 @@ it('applies reasoning and parallelism changes through independent callbacks', ()
     expect(lines.join('\n')).toContain('←/→ change');
     expect(lines.join('\n')).not.toContain('preview');
 
+    modal.handleInput('\x1b[C');
+    expect(onEnabledChange).toHaveBeenLastCalledWith(false);
+    expect(onThinkingLevelChange).not.toHaveBeenCalled();
+    expect(onMaxParallelismChange).not.toHaveBeenCalled();
+    lines = modal.render(80);
+    expect(lines.find((line) => line.includes('Subagent tool'))).toContain('disabled');
+
+    modal.handleInput('tui.select.down');
     modal.handleInput('\x1b[C');
     expect(onThinkingLevelChange).toHaveBeenLastCalledWith('low');
     expect(onMaxParallelismChange).not.toHaveBeenCalled();
@@ -198,6 +255,7 @@ it('applies reasoning and parallelism changes through independent callbacks', ()
     modal.handleInput('tui.select.down');
     modal.handleInput('\x1b[D');
     expect(onMaxParallelismChange).toHaveBeenLastCalledWith(2);
+    expect(onEnabledChange).toHaveBeenCalledOnce();
     expect(onThinkingLevelChange).toHaveBeenCalledTimes(5);
     lines = modal.render(80);
     expect(lines.find((line) => line.includes('Max parallelism'))).toContain('2');
@@ -205,14 +263,17 @@ it('applies reasoning and parallelism changes through independent callbacks', ()
 
 it('ignores hidden controls when the terminal is too short', () => {
     const source = new TestRunSource([]);
+    const onEnabledChange = vi.fn();
     const onThinkingLevelChange = vi.fn();
     const onMaxParallelismChange = vi.fn();
     const { close, modal } = setup(
         source,
         {
+            enabled: true,
             thinkingLevel: 'inherit',
             maxParallelism: 3,
             maxParallelismLimit: 8,
+            onEnabledChange,
             onThinkingLevelChange,
             onMaxParallelismChange,
         },
@@ -224,6 +285,7 @@ it('ignores hidden controls when the terminal is too short', () => {
     modal.handleInput('tui.input.tab');
     modal.handleInput('\x1b[C');
 
+    expect(onEnabledChange).not.toHaveBeenCalled();
     expect(onThinkingLevelChange).not.toHaveBeenCalled();
     expect(onMaxParallelismChange).not.toHaveBeenCalled();
     modal.handleInput('tui.select.cancel');
@@ -233,18 +295,20 @@ it('ignores hidden controls when the terminal is too short', () => {
 it('updates a displayed setting only after its callback succeeds', () => {
     const source = new TestRunSource([]);
     const { modal } = setup(source, {
+        enabled: true,
         thinkingLevel: 'inherit',
         maxParallelism: 3,
         maxParallelismLimit: 8,
-        onThinkingLevelChange: () => {
+        onEnabledChange: () => {
             throw new Error('configuration failed');
         },
+        onThinkingLevelChange: () => {},
         onMaxParallelismChange: () => {},
     });
     modal.handleInput('tui.input.tab');
 
     expect(() => modal.handleInput('\x1b[C')).toThrow('configuration failed');
-    expect(modal.render(80).find((line) => line.includes('Reasoning level'))).toContain('inherit');
+    expect(modal.render(80).find((line) => line.includes('Subagent tool'))).toContain('enabled');
 });
 
 it('updates live, preserves selection by run id, and unsubscribes when disposed', () => {

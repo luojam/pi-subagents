@@ -1,8 +1,4 @@
-import type {
-    ExtensionCommandContext,
-    KeybindingsManager,
-    Theme,
-} from '@earendil-works/pi-coding-agent';
+import type { ExtensionContext, KeybindingsManager, Theme } from '@earendil-works/pi-coding-agent';
 import {
     type Component,
     Key,
@@ -16,18 +12,33 @@ import { type ConfiguredSubagentThinkingLevel, cycleSubagentThinkingLevel } from
 import type { SubagentRunSnapshot, SubagentRunState } from './types.ts';
 
 const TARGET_HEIGHT_RATIO = 0.88;
-const FULL_MODAL_HEIGHT = 8;
-const SECTION_ROWS = 4;
+const FULL_MODAL_HEIGHT = 14;
+const SECTION_ROWS = 10;
+const SUBAGENT_MODAL_SHORTCUT = Key.ctrlAlt('s');
 
 type ModalSection = 'activity' | 'configuration';
-type ConfigurationSetting = 'reasoning' | 'parallelism';
+type ConfigurationSetting = 'enabled' | 'reasoning' | 'parallelism';
 
-const CONFIGURATION_SETTINGS: readonly ConfigurationSetting[] = ['reasoning', 'parallelism'];
+const CONFIGURATION_SETTINGS: readonly ConfigurationSetting[] = [
+    'enabled',
+    'reasoning',
+    'parallelism',
+];
+const CONFIGURATION_SETTINGS_LABELS: Record<ConfigurationSetting, string> = {
+    enabled: 'Subagent tool',
+    reasoning: 'Reasoning level',
+    parallelism: 'Max parallelism',
+};
+const CONFIGURATION_LABEL_WIDTH = Math.max(
+    ...CONFIGURATION_SETTINGS.map((setting) => visibleWidth(CONFIGURATION_SETTINGS_LABELS[setting]))
+);
 
 export interface SubagentsModalOptions {
+    enabled: boolean;
     thinkingLevel?: ConfiguredSubagentThinkingLevel;
     maxParallelism: number;
     maxParallelismLimit: number;
+    onEnabledChange(enabled: boolean): void;
     onThinkingLevelChange(thinkingLevel: ConfiguredSubagentThinkingLevel): void;
     onMaxParallelismChange(maxParallelism: number): void;
 }
@@ -104,6 +115,7 @@ export class SubagentsModal implements Component {
     private focusedSection: ModalSection = 'activity';
     private selectedIndex = 0;
     private selectedSettingIndex = 0;
+    private enabled: boolean;
     private thinkingLevel: ConfiguredSubagentThinkingLevel;
     private maxParallelism: number;
     private readonly maxParallelismLimit: number;
@@ -114,6 +126,7 @@ export class SubagentsModal implements Component {
     private readonly keybindings: KeybindingsManager;
     private readonly onClose: () => void;
     private readonly runSource: SubagentRunSource | undefined;
+    private readonly onEnabledChange: (enabled: boolean) => void;
     private readonly onThinkingLevelChange: (
         thinkingLevel: ConfiguredSubagentThinkingLevel
     ) => void;
@@ -133,8 +146,10 @@ export class SubagentsModal implements Component {
         this.onClose = onClose;
         this.runSource = runSource;
         this.runs = activeAndQueuedRuns(runSource);
+        this.onEnabledChange = options.onEnabledChange;
         this.onThinkingLevelChange = options.onThinkingLevelChange;
         this.onMaxParallelismChange = options.onMaxParallelismChange;
+        this.enabled = options.enabled;
         this.thinkingLevel = options.thinkingLevel ?? 'inherit';
         this.maxParallelismLimit = options.maxParallelismLimit;
         this.maxParallelism = options.maxParallelism;
@@ -144,7 +159,10 @@ export class SubagentsModal implements Component {
     handleInput(data: string): void {
         if (this.closed) return;
 
-        if (this.keybindings.matches(data, 'tui.select.cancel')) {
+        if (
+            matchesKey(data, SUBAGENT_MODAL_SHORTCUT) ||
+            this.keybindings.matches(data, 'tui.select.cancel')
+        ) {
             this.closed = true;
             this.dispose();
             this.onClose();
@@ -205,13 +223,16 @@ export class SubagentsModal implements Component {
             selected = false
         ) => {
             if (safeWidth === 1) return border('│');
+            if (innerWidth < 2) {
+                return `${border('│')}${' '.repeat(innerWidth)}${border('│')}`;
+            }
             const padded = padToWidth(
                 content,
-                innerWidth,
+                innerWidth - 2,
                 alignment,
                 selected ? (value) => this.theme.bg('selectedBg', value) : undefined
             );
-            return `${border('│')}${padded}${border('│')}`;
+            return `${border('│')} ${padded} ${border('│')}`;
         };
 
         const cancelKeys = this.keybindings.getKeys('tui.select.cancel').join('/');
@@ -270,7 +291,7 @@ export class SubagentsModal implements Component {
         const bodyHeight = height - 3;
         const listHeight = Math.max(1, bodyHeight - SECTION_ROWS);
         this.visibleListHeight = listHeight;
-        const lines = [titleBorder()];
+        const lines = [titleBorder(), contentRow('')];
         const activeCount = this.runs.filter((run) => run.state !== 'queued').length;
         const queuedCount = this.runs.length - activeCount;
 
@@ -283,20 +304,39 @@ export class SubagentsModal implements Component {
                 )
             )
         );
+        lines.push(contentRow(''));
         lines.push(
             contentRow(
-                this.renderSetting('Reasoning level', this.thinkingLevel, 0),
+                this.renderSetting(
+                    CONFIGURATION_SETTINGS_LABELS.enabled,
+                    this.enabled ? 'enabled' : 'disabled',
+                    0
+                ),
                 'left',
                 this.focusedSection === 'configuration' && this.selectedSettingIndex === 0
             )
         );
         lines.push(
             contentRow(
-                this.renderSetting('Max parallelism', String(this.maxParallelism), 1),
+                this.renderSetting(CONFIGURATION_SETTINGS_LABELS.reasoning, this.thinkingLevel, 1),
                 'left',
                 this.focusedSection === 'configuration' && this.selectedSettingIndex === 1
             )
         );
+        lines.push(
+            contentRow(
+                this.renderSetting(
+                    CONFIGURATION_SETTINGS_LABELS.parallelism,
+                    String(this.maxParallelism),
+                    2
+                ),
+                'left',
+                this.focusedSection === 'configuration' && this.selectedSettingIndex === 2
+            )
+        );
+        lines.push(contentRow(''));
+        lines.push(contentRow(border('─'.repeat(Math.max(0, innerWidth - 2)))));
+        lines.push(contentRow(''));
         lines.push(
             contentRow(
                 this.renderSectionHeader(
@@ -413,7 +453,12 @@ export class SubagentsModal implements Component {
               : 0;
         if (direction === 0) return;
 
-        if (CONFIGURATION_SETTINGS[this.selectedSettingIndex] === 'reasoning') {
+        const setting = CONFIGURATION_SETTINGS[this.selectedSettingIndex];
+        if (setting === 'enabled') {
+            const enabled = !this.enabled;
+            this.onEnabledChange(enabled);
+            this.enabled = enabled;
+        } else if (setting === 'reasoning') {
             const thinkingLevel = cycleSubagentThinkingLevel(this.thinkingLevel, direction);
             this.onThinkingLevelChange(thinkingLevel);
             this.thinkingLevel = thinkingLevel;
@@ -457,11 +502,14 @@ export class SubagentsModal implements Component {
             this.focusedSection === 'configuration' && this.selectedSettingIndex === index;
         const prefix = this.theme.fg('accent', selected ? '› ' : '  ');
         const styledLabel = this.theme.fg(selected ? 'text' : 'muted', label);
+        const labelPadding = ' '.repeat(
+            Math.max(0, CONFIGURATION_LABEL_WIDTH - visibleWidth(label))
+        );
         const control = `${this.theme.fg('dim', '‹')} ${this.theme.fg(
             selected ? 'accent' : 'text',
             value
         )} ${this.theme.fg('dim', '›')}`;
-        return `${prefix}${styledLabel}  ${control}`;
+        return `${prefix}${styledLabel}${labelPadding}  ${control}`;
     }
 
     private renderRun(run: SubagentRunSnapshot, selected: boolean): string {
@@ -477,7 +525,7 @@ export class SubagentsModal implements Component {
 }
 
 export async function openSubagentsModal(
-    ctx: ExtensionCommandContext,
+    ctx: ExtensionContext,
     runSource: SubagentRunSource | undefined,
     options: SubagentsModalOptions
 ): Promise<void> {

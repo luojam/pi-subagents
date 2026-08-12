@@ -22,7 +22,7 @@ import type { SubagentRunSnapshot } from './types.ts';
 const WIDGET_KEY = 'subagent-run';
 const CONCURRENCY_FLAG = 'subagent-concurrency';
 const SUBAGENT_REASONING_SHORTCUT = 'ctrl+alt+r';
-const SUBAGENT_TOGGLE_SHORTCUT = 'ctrl+alt+s';
+const SUBAGENT_MODAL_SHORTCUT = 'ctrl+alt+s';
 const DEFAULT_SUBAGENT_CONCURRENCY = 3;
 const MAX_SUBAGENT_CONCURRENCY = 8;
 
@@ -104,6 +104,20 @@ export default function subagentExtension(pi: ExtensionAPI): void {
         refreshWidget?.();
     };
 
+    const setSubagentEnabled = (enabled: boolean) => {
+        const activeTools = pi.getActiveTools();
+        if (enabled && !service) throw new Error('Subagent service is not initialized');
+
+        pi.setActiveTools(
+            enabled
+                ? activeTools.includes('subagent')
+                    ? activeTools
+                    : [...activeTools, 'subagent']
+                : activeTools.filter((name) => name !== 'subagent')
+        );
+        refreshWidget?.();
+    };
+
     pi.on('session_start', (_event, ctx) => {
         unsubscribeWidget?.();
         unsubscribeWidget = undefined;
@@ -156,21 +170,25 @@ export default function subagentExtension(pi: ExtensionAPI): void {
     pi.on('thinking_level_select', () => refreshWidget?.());
     pi.on('model_select', () => refreshWidget?.());
 
+    const showSubagentsModal = async (ctx: ExtensionContext) => {
+        if (ctx.mode !== 'tui') return;
+        await openSubagentsModal(ctx, service, {
+            enabled: pi.getActiveTools().includes('subagent'),
+            thinkingLevel: configuredThinkingLevel,
+            maxParallelism: configuredConcurrency,
+            maxParallelismLimit: MAX_SUBAGENT_CONCURRENCY,
+            onEnabledChange: setSubagentEnabled,
+            onThinkingLevelChange: setConfiguredThinkingLevel,
+            onMaxParallelismChange: (maxParallelism) => {
+                service?.setConcurrency(maxParallelism);
+                configuredConcurrency = maxParallelism;
+            },
+        });
+    };
+
     pi.registerCommand('subagents', {
         description: 'Open subagent management',
-        handler: async (_args, ctx) => {
-            if (ctx.mode !== 'tui') return;
-            await openSubagentsModal(ctx, service, {
-                thinkingLevel: configuredThinkingLevel,
-                maxParallelism: configuredConcurrency,
-                maxParallelismLimit: MAX_SUBAGENT_CONCURRENCY,
-                onThinkingLevelChange: setConfiguredThinkingLevel,
-                onMaxParallelismChange: (maxParallelism) => {
-                    service?.setConcurrency(maxParallelism);
-                    configuredConcurrency = maxParallelism;
-                },
-            });
-        },
+        handler: async (_args, ctx) => showSubagentsModal(ctx),
     });
 
     pi.registerShortcut(SUBAGENT_REASONING_SHORTCUT, {
@@ -192,21 +210,9 @@ export default function subagentExtension(pi: ExtensionAPI): void {
         },
     });
 
-    pi.registerShortcut(SUBAGENT_TOGGLE_SHORTCUT, {
-        description: 'Enable or disable the subagent tool',
-        handler: () => {
-            const activeTools = pi.getActiveTools();
-            if (!service) {
-                pi.setActiveTools(activeTools.filter((name) => name !== 'subagent'));
-                return;
-            }
-            pi.setActiveTools(
-                activeTools.includes('subagent')
-                    ? activeTools.filter((name) => name !== 'subagent')
-                    : [...activeTools, 'subagent']
-            );
-            refreshWidget?.();
-        },
+    pi.registerShortcut(SUBAGENT_MODAL_SHORTCUT, {
+        description: 'Open subagent management',
+        handler: showSubagentsModal,
     });
 
     pi.registerTool({
