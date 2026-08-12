@@ -21,8 +21,6 @@ const TAIL_MAX_LINES = 16;
 const COLLAPSED_MAX_COLUMNS = 100;
 const TRUNCATED_TASK_END_PADDING_COLUMNS = 3;
 
-export const SUBAGENT_TOGGLE_SHORTCUT = 'ctrl+alt+s';
-
 type ThemeColor = 'toolOutput' | 'muted' | 'dim' | 'error';
 
 // biome-ignore lint/suspicious/noControlCharactersInRegex: Parses intentional ANSI SGR sequences.

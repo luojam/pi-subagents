@@ -12,7 +12,7 @@ import {
     visibleWidth,
 } from '@earendil-works/pi-tui';
 import { isTerminalRunState } from './run-store.ts';
-import { type ConfiguredSubagentThinkingLevel, SUBAGENT_THINKING_LEVELS } from './thinking.ts';
+import { type ConfiguredSubagentThinkingLevel, cycleSubagentThinkingLevel } from './thinking.ts';
 import type { SubagentRunSnapshot, SubagentRunState } from './types.ts';
 
 const TARGET_HEIGHT_RATIO = 0.88;
@@ -414,11 +414,7 @@ export class SubagentsModal implements Component {
         if (direction === 0) return;
 
         if (CONFIGURATION_SETTINGS[this.selectedSettingIndex] === 'reasoning') {
-            const currentIndex = SUBAGENT_THINKING_LEVELS.indexOf(this.thinkingLevel);
-            const nextIndex =
-                (currentIndex + direction + SUBAGENT_THINKING_LEVELS.length) %
-                SUBAGENT_THINKING_LEVELS.length;
-            const thinkingLevel = SUBAGENT_THINKING_LEVELS[nextIndex];
+            const thinkingLevel = cycleSubagentThinkingLevel(this.thinkingLevel, direction);
             this.onThinkingLevelChange(thinkingLevel);
             this.thinkingLevel = thinkingLevel;
         } else {

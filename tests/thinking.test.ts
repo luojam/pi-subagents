@@ -1,5 +1,6 @@
 import { expect, it } from 'vitest';
 import {
+    cycleSubagentThinkingLevel,
     resolveDisplayedSubagentThinkingLevel,
     resolveSubagentThinkingLevel,
 } from '../extensions/subagent/thinking.ts';
@@ -20,6 +21,12 @@ function model(overrides: Partial<SubagentModel> = {}): SubagentModel {
         ...overrides,
     } as SubagentModel;
 }
+
+it('cycles configured thinking levels in both directions', () => {
+    expect(cycleSubagentThinkingLevel('inherit')).toBe('low');
+    expect(cycleSubagentThinkingLevel('max')).toBe('inherit');
+    expect(cycleSubagentThinkingLevel('inherit', -1)).toBe('max');
+});
 
 it('inherits the effective parent thinking level by default', () => {
     expect(resolveSubagentThinkingLevel('inherit', model(), 'medium')).toBe('medium');

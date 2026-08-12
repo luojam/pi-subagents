@@ -8,12 +8,12 @@ import {
     renderSubagentCall,
     renderSubagentResult,
     renderSubagentWidget,
-    SUBAGENT_TOGGLE_SHORTCUT,
     type SubagentSharedRenderState,
 } from './render.ts';
 import { SubagentService } from './service.ts';
 import {
     type ConfiguredSubagentThinkingLevel,
+    cycleSubagentThinkingLevel,
     resolveDisplayedSubagentThinkingLevel,
     resolveSubagentThinkingLevel,
 } from './thinking.ts';
@@ -21,6 +21,8 @@ import type { SubagentRunSnapshot } from './types.ts';
 
 const WIDGET_KEY = 'subagent-run';
 const CONCURRENCY_FLAG = 'subagent-concurrency';
+const SUBAGENT_REASONING_SHORTCUT = 'ctrl+alt+r';
+const SUBAGENT_TOGGLE_SHORTCUT = 'ctrl+alt+s';
 const DEFAULT_SUBAGENT_CONCURRENCY = 3;
 const MAX_SUBAGENT_CONCURRENCY = 8;
 
@@ -97,6 +99,11 @@ export default function subagentExtension(pi: ExtensionAPI): void {
     let unsubscribeWidget: (() => void) | undefined;
     let refreshWidget: (() => void) | undefined;
 
+    const setConfiguredThinkingLevel = (thinkingLevel: ConfiguredSubagentThinkingLevel) => {
+        configuredThinkingLevel = thinkingLevel;
+        refreshWidget?.();
+    };
+
     pi.on('session_start', (_event, ctx) => {
         unsubscribeWidget?.();
         unsubscribeWidget = undefined;
@@ -157,15 +164,31 @@ export default function subagentExtension(pi: ExtensionAPI): void {
                 thinkingLevel: configuredThinkingLevel,
                 maxParallelism: configuredConcurrency,
                 maxParallelismLimit: MAX_SUBAGENT_CONCURRENCY,
-                onThinkingLevelChange: (thinkingLevel) => {
-                    configuredThinkingLevel = thinkingLevel;
-                    refreshWidget?.();
-                },
+                onThinkingLevelChange: setConfiguredThinkingLevel,
                 onMaxParallelismChange: (maxParallelism) => {
                     service?.setConcurrency(maxParallelism);
                     configuredConcurrency = maxParallelism;
                 },
             });
+        },
+    });
+
+    pi.registerShortcut(SUBAGENT_REASONING_SHORTCUT, {
+        description: 'Cycle subagent reasoning level',
+        handler: (ctx) => {
+            setConfiguredThinkingLevel(cycleSubagentThinkingLevel(configuredThinkingLevel));
+            const effectiveThinkingLevel = ctx.model
+                ? resolveDisplayedSubagentThinkingLevel(
+                      configuredThinkingLevel,
+                      ctx.model,
+                      ctx.thinkingLevel ?? pi.getThinkingLevel()
+                  )
+                : configuredThinkingLevel;
+            const notificationLevel =
+                effectiveThinkingLevel === configuredThinkingLevel
+                    ? configuredThinkingLevel
+                    : `${configuredThinkingLevel} (effective: ${effectiveThinkingLevel})`;
+            ctx.ui.notify(`Subagent reasoning level: ${notificationLevel}`, 'info');
         },
     });
 

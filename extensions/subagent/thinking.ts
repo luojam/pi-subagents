@@ -13,6 +13,17 @@ export const SUBAGENT_THINKING_LEVELS = [
 export type ConfiguredSubagentThinkingLevel = (typeof SUBAGENT_THINKING_LEVELS)[number];
 export type DisplayedSubagentThinkingLevel = SubagentThinkingLevel | 'unsupported';
 
+export function cycleSubagentThinkingLevel(
+    current: ConfiguredSubagentThinkingLevel,
+    direction: -1 | 1 = 1
+): ConfiguredSubagentThinkingLevel {
+    const currentIndex = SUBAGENT_THINKING_LEVELS.indexOf(current);
+    const nextIndex =
+        (currentIndex + direction + SUBAGENT_THINKING_LEVELS.length) %
+        SUBAGENT_THINKING_LEVELS.length;
+    return SUBAGENT_THINKING_LEVELS[nextIndex];
+}
+
 export function resolveSubagentThinkingLevel(
     configured: ConfiguredSubagentThinkingLevel,
     model: SubagentModel,

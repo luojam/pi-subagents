@@ -19,7 +19,7 @@ The accepted range is `1` through `8`. Use `--subagent-concurrency 1` to force s
 
 ## Thinking
 
-Subagents inherit the parent's effective thinking level by default. Use `/subagents` in the TUI to choose `inherit`, `low`, `medium`, `high`, `xhigh`, or `max`; there is no command-line reasoning-level setting. `inherit` resolves the parent's current effective level without an extension-level cap, so parent model or thinking changes during the session are respected. An explicit modal value overrides the parent level. In both cases, the requested level is clamped to the selected model's capabilities; run snapshots and child sessions use the resulting effective level.
+Subagents inherit the parent's effective thinking level by default. Use `/subagents` in the TUI to choose `inherit`, `low`, `medium`, `high`, `xhigh`, or `max`, or press `Ctrl+Alt+R` to cycle through those options; there is no command-line reasoning-level setting. `inherit` resolves the parent's current effective level without an extension-level cap, so parent model or thinking changes during the session are respected. An explicit value overrides the parent level. In both cases, the requested level is clamped to the selected model's capabilities; run snapshots and child sessions use the resulting effective level.
 
 The tool still delegates one task per call. Pi executes sibling tool calls in parallel, so the parent model controls dependencies through when it emits calls:
 
