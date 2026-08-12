@@ -20,7 +20,6 @@ import {
 import type { SubagentRunSnapshot } from './types.ts';
 
 const WIDGET_KEY = 'subagent-run';
-const CONCURRENCY_FLAG = 'subagent-concurrency';
 const SUBAGENT_REASONING_SHORTCUT = 'ctrl+alt+r';
 const SUBAGENT_MODAL_SHORTCUT = 'ctrl+alt+s';
 const DEFAULT_SUBAGENT_CONCURRENCY = 3;
@@ -38,20 +37,6 @@ const SubagentParameters = Type.Object({
 interface ResolvedWorkingDirectory {
     cwd: string;
     inheritsParentTrust: boolean;
-}
-
-function resolveConcurrency(value: boolean | string | undefined): number {
-    const concurrency = Number(value ?? DEFAULT_SUBAGENT_CONCURRENCY);
-    if (
-        !Number.isInteger(concurrency) ||
-        concurrency < 1 ||
-        concurrency > MAX_SUBAGENT_CONCURRENCY
-    ) {
-        throw new Error(
-            `--${CONCURRENCY_FLAG} must be an integer from 1 to ${MAX_SUBAGENT_CONCURRENCY}`
-        );
-    }
-    return concurrency;
 }
 
 function isWithinDirectory(directory: string, target: string): boolean {
@@ -86,11 +71,6 @@ async function resolveWorkingDirectory(
 }
 
 export default function subagentExtension(pi: ExtensionAPI): void {
-    pi.registerFlag(CONCURRENCY_FLAG, {
-        description: `Maximum concurrent subagents (1-${MAX_SUBAGENT_CONCURRENCY})`,
-        type: 'string',
-        default: String(DEFAULT_SUBAGENT_CONCURRENCY),
-    });
     let configuredThinkingLevel: ConfiguredSubagentThinkingLevel = 'inherit';
     let configuredConcurrency = DEFAULT_SUBAGENT_CONCURRENCY;
     let service: SubagentService | undefined;
@@ -124,7 +104,7 @@ export default function subagentExtension(pi: ExtensionAPI): void {
         refreshWidget = undefined;
         serviceInitializationError = undefined;
         try {
-            configuredConcurrency = resolveConcurrency(pi.getFlag(CONCURRENCY_FLAG));
+            configuredConcurrency = DEFAULT_SUBAGENT_CONCURRENCY;
             service = new SubagentService({ concurrency: configuredConcurrency });
         } catch (error) {
             service = undefined;

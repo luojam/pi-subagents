@@ -9,13 +9,7 @@ An in-process Pi subagent extension with isolated child sessions and bounded par
 
 ## Concurrency
 
-The extension admits up to **3** subagents concurrently by default. Set the process-wide limit with:
-
-```bash
-pi -e ./extensions/subagent/index.ts --subagent-concurrency 4
-```
-
-The accepted range is `1` through `8`. Use `--subagent-concurrency 1` to force serial execution.
+The extension admits up to **3** subagents concurrently by default. Use `/subagents` or press `Ctrl+Alt+S` in the TUI to set max parallelism from `1` through `8`; choose `1` to force serial execution.
 
 ## Availability
 
