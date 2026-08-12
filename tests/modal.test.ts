@@ -189,11 +189,16 @@ it('applies reasoning and parallelism changes through independent callbacks', ()
 
     modal.handleInput('tui.select.confirm');
     expect(onThinkingLevelChange).toHaveBeenLastCalledWith('medium');
+    modal.handleInput('tui.select.confirm');
+    modal.handleInput('tui.select.confirm');
+    modal.handleInput('tui.select.confirm');
+    expect(onThinkingLevelChange).toHaveBeenLastCalledWith('max');
+    expect(modal.render(80).find((line) => line.includes('Reasoning level'))).toContain('max');
 
     modal.handleInput('tui.select.down');
     modal.handleInput('\x1b[D');
     expect(onMaxParallelismChange).toHaveBeenLastCalledWith(2);
-    expect(onThinkingLevelChange).toHaveBeenCalledTimes(2);
+    expect(onThinkingLevelChange).toHaveBeenCalledTimes(5);
     lines = modal.render(80);
     expect(lines.find((line) => line.includes('Max parallelism'))).toContain('2');
 });

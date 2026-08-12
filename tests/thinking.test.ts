@@ -1,7 +1,6 @@
 import { expect, it } from 'vitest';
 import {
     resolveDisplayedSubagentThinkingLevel,
-    resolveSubagentThinkingConfiguration,
     resolveSubagentThinkingLevel,
 } from '../extensions/subagent/thinking.ts';
 import type { SubagentModel } from '../extensions/subagent/types.ts';
@@ -23,53 +22,23 @@ function model(overrides: Partial<SubagentModel> = {}): SubagentModel {
 }
 
 it('inherits the effective parent thinking level by default', () => {
-    for (const value of [undefined, 'inherit']) {
-        const configured = resolveSubagentThinkingConfiguration(value);
-        expect(resolveSubagentThinkingLevel(configured, model(), 'medium')).toBe('medium');
-    }
+    expect(resolveSubagentThinkingLevel('inherit', model(), 'medium')).toBe('medium');
 });
 
-it('uses an explicit configured thinking level instead of the parent level', () => {
-    const configured = resolveSubagentThinkingConfiguration('high');
-    expect(resolveSubagentThinkingLevel(configured, model(), 'low')).toBe('high');
-});
-
-it('caps inherited thinking at high', () => {
-    const configured = resolveSubagentThinkingConfiguration('inherit');
+it('inherits extended parent thinking levels without an extension-level cap', () => {
     const selectedModel = model({ thinkingLevelMap: { xhigh: 'xhigh', max: 'max' } });
-    expect(resolveSubagentThinkingLevel(configured, selectedModel, 'xhigh')).toBe('high');
+    expect(resolveSubagentThinkingLevel('inherit', selectedModel, 'xhigh')).toBe('xhigh');
+    expect(resolveSubagentThinkingLevel('inherit', selectedModel, 'max')).toBe('max');
 });
 
-it('rejects inheritance when the model has no supported level at or below high', () => {
-    const configured = resolveSubagentThinkingConfiguration('inherit');
-    const selectedModel = model({
-        thinkingLevelMap: {
-            off: null,
-            minimal: null,
-            low: null,
-            medium: null,
-            high: null,
-            xhigh: 'xhigh',
-            max: 'max',
-        },
-    });
-    expect(() => resolveSubagentThinkingLevel(configured, selectedModel, 'high')).toThrow(
-        'test/test-model does not support a subagent thinking level at or below high'
-    );
-    expect(resolveDisplayedSubagentThinkingLevel(configured, selectedModel, 'high')).toBe(
-        'unsupported'
-    );
+it('uses an explicit modal thinking level instead of the parent level', () => {
+    const selectedModel = model({ thinkingLevelMap: { max: 'max' } });
+    expect(resolveSubagentThinkingLevel('max', selectedModel, 'low')).toBe('max');
 });
 
 it('clamps the configured thinking level to the selected model capabilities', () => {
-    const configured = resolveSubagentThinkingConfiguration('high');
-    expect(resolveSubagentThinkingLevel(configured, model({ reasoning: false }), 'medium')).toBe(
-        'off'
-    );
-});
-
-it('rejects an invalid configured thinking level', () => {
-    expect(() => resolveSubagentThinkingConfiguration('max')).toThrow(
-        '--subagent-thinking must be one of: inherit, low, medium, high'
-    );
+    expect(resolveSubagentThinkingLevel('high', model({ reasoning: false }), 'medium')).toBe('off');
+    expect(
+        resolveDisplayedSubagentThinkingLevel('high', model({ reasoning: false }), 'medium')
+    ).toBe('off');
 });

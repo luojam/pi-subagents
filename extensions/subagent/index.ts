@@ -15,14 +15,12 @@ import { SubagentService } from './service.ts';
 import {
     type ConfiguredSubagentThinkingLevel,
     resolveDisplayedSubagentThinkingLevel,
-    resolveSubagentThinkingConfiguration,
     resolveSubagentThinkingLevel,
 } from './thinking.ts';
 import type { SubagentRunSnapshot } from './types.ts';
 
 const WIDGET_KEY = 'subagent-run';
 const CONCURRENCY_FLAG = 'subagent-concurrency';
-const THINKING_FLAG = 'subagent-thinking';
 const DEFAULT_SUBAGENT_CONCURRENCY = 3;
 const MAX_SUBAGENT_CONCURRENCY = 8;
 
@@ -91,12 +89,6 @@ export default function subagentExtension(pi: ExtensionAPI): void {
         type: 'string',
         default: String(DEFAULT_SUBAGENT_CONCURRENCY),
     });
-    pi.registerFlag(THINKING_FLAG, {
-        description: 'Subagent thinking level (inherit, low, medium, or high)',
-        type: 'string',
-        default: 'inherit',
-    });
-
     let configuredThinkingLevel: ConfiguredSubagentThinkingLevel = 'inherit';
     let configuredConcurrency = DEFAULT_SUBAGENT_CONCURRENCY;
     let service: SubagentService | undefined;
@@ -112,9 +104,6 @@ export default function subagentExtension(pi: ExtensionAPI): void {
         serviceInitializationError = undefined;
         try {
             configuredConcurrency = resolveConcurrency(pi.getFlag(CONCURRENCY_FLAG));
-            configuredThinkingLevel = resolveSubagentThinkingConfiguration(
-                pi.getFlag(THINKING_FLAG)
-            );
             service = new SubagentService({ concurrency: configuredConcurrency });
         } catch (error) {
             service = undefined;

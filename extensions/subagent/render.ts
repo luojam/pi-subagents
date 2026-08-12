@@ -652,7 +652,7 @@ export function renderSubagentWidget(
                 ? representative.thinkingLevel
                 : 'mixed'
             : idleThinkingLevel;
-        const thinking = theme.fg('dim', `thinking ${boundedLine(displayedThinkingLevel, 128)}`);
+        const thinking = theme.fg('dim', boundedLine(displayedThinkingLevel, 128));
         if (!enabled) {
             return [[name, theme.fg('muted', 'disabled'), thinking].join(separator)];
         }

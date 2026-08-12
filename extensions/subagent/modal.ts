@@ -301,10 +301,7 @@ export class SubagentsModal implements Component {
             contentRow(
                 this.renderSectionHeader(
                     'Activity',
-                    `${this.theme.fg('accent', '●')} ${activeCount} active  ${this.theme.fg(
-                        'muted',
-                        '…'
-                    )} ${queuedCount} queued`,
+                    `${this.theme.fg('accent', '●')} ${activeCount} active  ${queuedCount} queued`,
                     this.focusedSection === 'activity'
                 )
             )

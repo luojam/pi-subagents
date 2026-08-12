@@ -22,10 +22,10 @@ function widgetLine(
 }
 
 it('renders unsupported idle resolution without hiding the widget', () => {
-    expect(widgetLine([], 'unsupported', false)).toBe('subagent · disabled · thinking unsupported');
+    expect(widgetLine([], 'unsupported', false)).toBe('subagent · disabled · unsupported');
 });
 
 it('uses run snapshots for active thinking labels', () => {
-    expect(widgetLine([run('high')], 'low')).toContain('thinking high');
-    expect(widgetLine([run('low'), run('high')], 'medium')).toContain('thinking mixed');
+    expect(widgetLine([run('high')], 'low')).toContain(' · high');
+    expect(widgetLine([run('low'), run('high')], 'medium')).toContain(' · mixed');
 });
