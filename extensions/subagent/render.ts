@@ -658,13 +658,11 @@ export function renderSubagentWidget(
             return [[name, theme.fg('muted', 'idle'), thinking].join(separator)];
         }
 
-        const activity = representative?.currentTool?.name;
         const parts = [
             name,
             activeRuns.length > 0 ? theme.fg('accent', `${activeRuns.length} active`) : undefined,
-            activity ? theme.fg('muted', boundedLine(activity, 128)) : undefined,
-            thinking,
             queuedCount > 0 ? theme.fg('dim', `${queuedCount} queued`) : undefined,
+            thinking,
         ].filter((part): part is string => !!part);
         return [parts.join(separator)];
     });
