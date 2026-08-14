@@ -6,6 +6,7 @@ import {
     type TUI,
     truncateToWidth,
     visibleWidth,
+    wrapTextWithAnsi,
 } from '@earendil-works/pi-tui';
 import { isTerminalRunState } from './run-store.ts';
 import { type ConfiguredSubagentThinkingLevel, cycleSubagentThinkingLevel } from './thinking.ts';
@@ -18,6 +19,11 @@ const SUBAGENT_MODAL_SHORTCUT = Key.ctrlAlt('s');
 
 type ModalSection = 'activity' | 'configuration';
 type ConfigurationSetting = 'enabled' | 'reasoning' | 'parallelism';
+
+interface RunSpan {
+    readonly start: number;
+    readonly end: number;
+}
 
 const CONFIGURATION_SETTINGS: readonly ConfigurationSetting[] = [
     'enabled',
@@ -115,6 +121,14 @@ export class SubagentsModal implements Component {
     private focusedSection: ModalSection = 'activity';
     private selectedIndex = 0;
     private selectedSettingIndex = 0;
+    private expandedRunId: string | undefined;
+    private activityScrollTop = 0;
+    private revealSelectedRun: 'start' | 'end' | undefined = 'start';
+    private pendingSelectedViewportOffset: number | undefined;
+    private runSpans: readonly RunSpan[] = [];
+    private runSpansById = new Map<string, RunSpan>();
+    private activityLineCount = 0;
+    private activityContentWidth: number | undefined;
     private enabled: boolean;
     private thinkingLevel: ConfiguredSubagentThinkingLevel;
     private maxParallelism: number;
@@ -182,19 +196,37 @@ export class SubagentsModal implements Component {
         }
         if (this.runs.length === 0) return;
 
+        if (this.keybindings.matches(data, 'tui.select.confirm')) {
+            const selectedRun = this.runs[this.selectedIndex];
+            if (!selectedRun) return;
+            this.expandedRunId = this.expandedRunId === selectedRun.id ? undefined : selectedRun.id;
+            this.pendingSelectedViewportOffset = undefined;
+            this.revealSelectedRun = 'start';
+            this.relayoutActivityRuns();
+            this.tui.requestRender();
+            return;
+        }
+
         let nextIndex = this.selectedIndex;
+        let revealEdge: 'start' | 'end' = 'start';
         if (this.keybindings.matches(data, 'tui.select.up')) {
             nextIndex = this.selectedIndex === 0 ? this.runs.length - 1 : this.selectedIndex - 1;
+            revealEdge = 'end';
         } else if (this.keybindings.matches(data, 'tui.select.down')) {
             nextIndex = this.selectedIndex === this.runs.length - 1 ? 0 : this.selectedIndex + 1;
         } else if (this.keybindings.matches(data, 'tui.select.pageUp')) {
-            nextIndex = Math.max(0, this.selectedIndex - this.visibleListHeight);
+            if (this.scrollExpandedRun(-1)) return;
+            nextIndex = this.pageSelection(-1);
+            revealEdge = 'end';
         } else if (this.keybindings.matches(data, 'tui.select.pageDown')) {
-            nextIndex = Math.min(this.runs.length - 1, this.selectedIndex + this.visibleListHeight);
+            if (this.scrollExpandedRun(1)) return;
+            nextIndex = this.pageSelection(1);
         }
 
         if (nextIndex !== this.selectedIndex) {
             this.selectedIndex = nextIndex;
+            this.pendingSelectedViewportOffset = undefined;
+            this.revealSelectedRun = revealEdge;
             this.tui.requestRender();
         }
     }
@@ -347,7 +379,12 @@ export class SubagentsModal implements Component {
             )
         );
 
+        const contentWidth = Math.max(0, innerWidth - 2);
+        this.activityContentWidth = contentWidth;
         if (this.runs.length === 0) {
+            this.runSpans = [];
+            this.runSpansById = new Map();
+            this.activityLineCount = 0;
             const emptyRow = Math.floor(listHeight / 2);
             for (let row = 0; row < listHeight; row++) {
                 lines.push(
@@ -360,21 +397,14 @@ export class SubagentsModal implements Component {
                 );
             }
         } else {
-            const startIndex = Math.max(
-                0,
-                Math.min(
-                    this.selectedIndex - Math.floor(listHeight / 2),
-                    this.runs.length - listHeight
-                )
-            );
-            const endIndex = Math.min(this.runs.length, startIndex + listHeight);
+            const flattened = this.layoutActivityRuns(contentWidth);
+            this.updateActivityViewport(listHeight);
+
             for (let row = 0; row < listHeight; row++) {
-                const index = startIndex + row;
-                const run = index < endIndex ? this.runs[index] : undefined;
-                const selected = this.focusedSection === 'activity' && index === this.selectedIndex;
+                const rendered = flattened[this.activityScrollTop + row];
                 lines.push(
-                    run
-                        ? contentRow(this.renderRun(run, selected), 'left', selected)
+                    rendered
+                        ? contentRow(rendered.content, 'left', rendered.selected)
                         : contentRow('')
                 );
             }
@@ -387,14 +417,20 @@ export class SubagentsModal implements Component {
                 ? [upKeys, downKeys].filter(Boolean).join('/')
                 : 'navigation unbound';
         const position =
-            this.runs.length > listHeight ? ` · ${this.selectedIndex + 1}/${this.runs.length}` : '';
+            this.runs.length > 1 && this.activityLineCount > listHeight
+                ? ` · ${this.selectedIndex + 1}/${this.runs.length}`
+                : '';
         const tabKeys = this.keybindings.getKeys('tui.input.tab').join('/');
         const sectionHint = tabKeys ? `${tabKeys} section · ` : 'section unbound · ';
+        const confirmKeys = this.keybindings.getKeys('tui.select.confirm').join('/');
+        const expandAction =
+            this.runs[this.selectedIndex]?.id === this.expandedRunId ? 'collapse' : 'expand';
+        const expandHint = confirmKeys ? `${confirmKeys} ${expandAction} · ` : '';
         const navigationHint =
             this.focusedSection === 'configuration'
                 ? `${navigationKeys} select · ←/→ change · `
                 : this.runs.length > 0
-                  ? `${navigationKeys} select · `
+                  ? `${navigationKeys} select · ${expandHint}`
                   : '';
         lines.push(
             contentRow(
@@ -476,6 +512,10 @@ export class SubagentsModal implements Component {
     private refreshRuns(): void {
         if (this.disposed) return;
         const selectedId = this.runs[this.selectedIndex]?.id;
+        const selectedSpan = selectedId ? this.runSpansById.get(selectedId) : undefined;
+        const selectedViewportOffset = selectedSpan
+            ? selectedSpan.start - this.activityScrollTop
+            : undefined;
         const nextRuns = activeAndQueuedRuns(this.runSource);
         this.runs = nextRuns;
 
@@ -486,7 +526,52 @@ export class SubagentsModal implements Component {
             selectedRunIndex >= 0
                 ? selectedRunIndex
                 : Math.max(0, Math.min(this.selectedIndex, nextRuns.length - 1));
+        if (this.expandedRunId && !nextRuns.some((run) => run.id === this.expandedRunId)) {
+            this.expandedRunId = undefined;
+        }
+        if (this.revealSelectedRun) {
+            this.pendingSelectedViewportOffset = undefined;
+        } else if (selectedRunIndex >= 0 && selectedViewportOffset !== undefined) {
+            this.pendingSelectedViewportOffset = selectedViewportOffset;
+        } else {
+            this.pendingSelectedViewportOffset = undefined;
+            this.revealSelectedRun = 'start';
+        }
+        this.relayoutActivityRuns();
         this.tui.requestRender();
+    }
+
+    private layoutActivityRuns(
+        contentWidth: number
+    ): Array<{ content: string; selected: boolean }> {
+        const flattened: Array<{ content: string; selected: boolean }> = [];
+        const spans: RunSpan[] = [];
+        const spansById = new Map<string, RunSpan>();
+        for (const [index, run] of this.runs.entries()) {
+            const selected = this.focusedSection === 'activity' && index === this.selectedIndex;
+            const start = flattened.length;
+            flattened.push(
+                ...this.renderRunLines(
+                    run,
+                    selected,
+                    contentWidth,
+                    run.id === this.expandedRunId
+                ).map((content) => ({ content, selected }))
+            );
+            const span = { start, end: flattened.length };
+            spans.push(span);
+            spansById.set(run.id, span);
+        }
+        this.runSpans = spans;
+        this.runSpansById = spansById;
+        this.activityLineCount = flattened.length;
+        return flattened;
+    }
+
+    private relayoutActivityRuns(): void {
+        if (this.activityContentWidth === undefined) return;
+        this.layoutActivityRuns(this.activityContentWidth);
+        this.updateActivityViewport(this.visibleListHeight);
     }
 
     private renderSectionHeader(label: string, detail: string, focused: boolean): string {
@@ -512,15 +597,149 @@ export class SubagentsModal implements Component {
         return `${prefix}${styledLabel}${labelPadding}  ${control}`;
     }
 
-    private renderRun(run: SubagentRunSnapshot, selected: boolean): string {
+    private pageSelection(direction: -1 | 1): number {
+        const selectedSpan = this.runSpans[this.selectedIndex];
+        if (!selectedSpan || this.runSpans.length !== this.runs.length) {
+            return Math.max(
+                0,
+                Math.min(
+                    this.runs.length - 1,
+                    this.selectedIndex + direction * this.visibleListHeight
+                )
+            );
+        }
+
+        const targetLine = selectedSpan.start + direction * this.visibleListHeight;
+        if (direction < 0) {
+            for (let index = this.selectedIndex - 1; index >= 0; index--) {
+                if ((this.runSpans[index]?.start ?? 0) <= targetLine) return index;
+            }
+            return 0;
+        }
+        for (let index = this.selectedIndex + 1; index < this.runSpans.length; index++) {
+            if ((this.runSpans[index]?.end ?? Number.NEGATIVE_INFINITY) > targetLine) return index;
+        }
+        return this.runs.length - 1;
+    }
+
+    private scrollExpandedRun(direction: -1 | 1): boolean {
+        const selectedRun = this.runs[this.selectedIndex];
+        const selectedSpan = this.runSpans[this.selectedIndex];
+        if (
+            !selectedRun ||
+            selectedRun.id !== this.expandedRunId ||
+            !selectedSpan ||
+            selectedSpan.end - selectedSpan.start <= this.visibleListHeight
+        ) {
+            return false;
+        }
+
+        const boundary =
+            direction < 0
+                ? selectedSpan.start
+                : Math.max(selectedSpan.start, selectedSpan.end - this.visibleListHeight);
+        const nextScrollTop =
+            direction < 0
+                ? Math.max(boundary, this.activityScrollTop - this.visibleListHeight)
+                : Math.min(boundary, this.activityScrollTop + this.visibleListHeight);
+        if (nextScrollTop === this.activityScrollTop) return false;
+        this.activityScrollTop = nextScrollTop;
+        this.pendingSelectedViewportOffset = undefined;
+        this.revealSelectedRun = undefined;
+        this.tui.requestRender();
+        return true;
+    }
+
+    private updateActivityViewport(listHeight: number): void {
+        const maxScrollTop = Math.max(0, this.activityLineCount - listHeight);
+        this.activityScrollTop = Math.max(0, Math.min(this.activityScrollTop, maxScrollTop));
+        const selectedSpan = this.runSpans[this.selectedIndex];
+        if (!selectedSpan) {
+            this.activityScrollTop = 0;
+            this.pendingSelectedViewportOffset = undefined;
+            this.revealSelectedRun = undefined;
+            return;
+        }
+
+        if (this.pendingSelectedViewportOffset !== undefined) {
+            const spanHeight = selectedSpan.end - selectedSpan.start;
+            const minimum =
+                spanHeight > listHeight ? selectedSpan.start : selectedSpan.end - listHeight;
+            const maximum =
+                spanHeight > listHeight ? selectedSpan.end - listHeight : selectedSpan.start;
+            const desired = selectedSpan.start - this.pendingSelectedViewportOffset;
+            this.activityScrollTop = Math.max(minimum, Math.min(desired, maximum));
+            this.pendingSelectedViewportOffset = undefined;
+            this.revealSelectedRun = undefined;
+        } else if (this.revealSelectedRun) {
+            if (selectedSpan.end - selectedSpan.start > listHeight) {
+                this.activityScrollTop =
+                    this.revealSelectedRun === 'end'
+                        ? selectedSpan.end - listHeight
+                        : selectedSpan.start;
+            } else if (selectedSpan.start < this.activityScrollTop) {
+                this.activityScrollTop = selectedSpan.start;
+            } else if (selectedSpan.end > this.activityScrollTop + listHeight) {
+                this.activityScrollTop = selectedSpan.end - listHeight;
+            }
+            this.revealSelectedRun = undefined;
+        }
+
+        const spanHeight = selectedSpan.end - selectedSpan.start;
+        const minimum =
+            spanHeight > listHeight ? selectedSpan.start : selectedSpan.end - listHeight;
+        const maximum =
+            spanHeight > listHeight ? selectedSpan.end - listHeight : selectedSpan.start;
+        this.activityScrollTop = Math.max(minimum, Math.min(this.activityScrollTop, maximum));
+        this.activityScrollTop = Math.max(0, Math.min(this.activityScrollTop, maxScrollTop));
+    }
+
+    private renderRunLines(
+        run: SubagentRunSnapshot,
+        selected: boolean,
+        width: number,
+        expanded: boolean
+    ): string[] {
         const prefix = this.theme.fg('accent', selected ? '› ' : '  ');
         const status = this.theme.fg(
             stateColor(run.state),
             `${stateMarker(run.state)} ${run.state}`
         );
         const taskSummary = run.task.replace(/[\r\n]+/gu, ' ').trim() || '(untitled task)';
-        const task = this.theme.fg(selected ? 'text' : 'muted', taskSummary);
-        return `${prefix}${status}  ${task}`;
+        if (!expanded) {
+            return [
+                `${prefix}${status}  ${this.theme.fg(selected ? 'text' : 'muted', taskSummary)}`,
+            ];
+        }
+
+        const task = run.task.replace(/\r\n?/gu, '\n').trim() || '(untitled task)';
+        const heading = `${prefix}${status}  `;
+        const headingWidth = visibleWidth(heading);
+        const inlineTaskWidth = width - headingWidth;
+        const taskColor = selected ? 'text' : 'muted';
+
+        if (inlineTaskWidth >= 8) {
+            const wrappedTask = this.wrapTask(task, inlineTaskWidth);
+            return wrappedTask.map((line, index) => {
+                const indentation = index === 0 ? heading : ' '.repeat(headingWidth);
+                return `${indentation}${this.theme.fg(taskColor, line)}`;
+            });
+        }
+
+        const indentationWidth = Math.min(4, Math.max(0, width - 1));
+        const indentation = ' '.repeat(indentationWidth);
+        const wrappedTask = this.wrapTask(task, Math.max(1, width - indentationWidth));
+        return [
+            `${prefix}${status}`,
+            ...wrappedTask.map((line) => `${indentation}${this.theme.fg(taskColor, line)}`),
+        ];
+    }
+
+    private wrapTask(task: string, width: number): string[] {
+        return task.split('\n').flatMap((line) => {
+            const wrapped = wrapTextWithAnsi(line, width);
+            return wrapped.length > 0 ? wrapped : [''];
+        });
     }
 }
 

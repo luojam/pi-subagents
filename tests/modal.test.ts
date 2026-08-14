@@ -63,8 +63,9 @@ function setup(
     terminalRows = 18
 ) {
     const requestRender = vi.fn();
+    const terminal = { rows: terminalRows };
     const tui = {
-        terminal: { rows: terminalRows },
+        terminal,
         requestRender,
     } as unknown as TUI;
     const theme = {
@@ -78,6 +79,7 @@ function setup(
                 'tui.select.up': ['up'],
                 'tui.select.down': ['down'],
                 'tui.select.cancel': ['escape'],
+                'tui.select.confirm': ['enter'],
                 'tui.input.tab': ['tab'],
             };
             return keys[action] ?? [];
@@ -92,7 +94,7 @@ function setup(
         source,
         options
     );
-    return { close, modal, requestRender };
+    return { close, modal, requestRender, terminal };
 }
 
 it('lists only active and queued runs and moves the selected row', () => {
@@ -153,6 +155,141 @@ it('lists only active and queued runs and moves the selected row', () => {
     modal.handleInput('tui.select.cancel');
     expect(close).toHaveBeenCalledOnce();
     expect(source.listeners.size).toBe(0);
+});
+
+it('expands the selected run without changing modal dimensions or exposing extra data', () => {
+    const expandedTail = 'EXPANDED_TASK_TAIL';
+    const source = new TestRunSource([
+        {
+            ...run(
+                'active',
+                'running',
+                `inspect ${'wrapped task content '.repeat(4)}\n${expandedTail}`
+            ),
+            responseTail: 'HIDDEN_RESPONSE_TAIL',
+        },
+    ]);
+    const { modal, requestRender } = setup(source, undefined, undefined, 24);
+
+    const collapsed = modal.render(40);
+    expect(collapsed.join('\n')).not.toContain(expandedTail);
+
+    modal.handleInput('tui.select.confirm');
+    const expanded = modal.render(40);
+    expect(requestRender).toHaveBeenCalledOnce();
+    expect(expanded.join('\n')).toContain(expandedTail);
+    expect(expanded.join('\n')).not.toContain('HIDDEN_RESPONSE_TAIL');
+    expect(expanded.find((line) => line.includes(expandedTail))).toContain('\x1b[7m');
+    expect(expanded).toHaveLength(collapsed.length);
+    expect(expanded.every((line) => visibleWidth(line) === 40)).toBe(true);
+    expect(expanded.at(-1)).toMatch(/^╰─+╯$/u);
+
+    modal.handleInput('tui.select.confirm');
+    expect(modal.render(40).join('\n')).not.toContain(expandedTail);
+});
+
+it('pages through an expanded run that is taller than the activity viewport', () => {
+    const expandedTail = 'OVERSIZED_TASK_TAIL';
+    const source = new TestRunSource([
+        run('active', 'running', `${'activity detail '.repeat(20)}${expandedTail}`),
+    ]);
+    const { modal } = setup(source, undefined, undefined, 18);
+    const initialHeight = modal.render(40).length;
+
+    modal.handleInput('tui.select.confirm');
+    let lines = modal.render(40);
+    expect(lines.join('\n')).not.toContain(expandedTail);
+
+    for (let page = 0; page < 20 && !lines.join('\n').includes(expandedTail); page++) {
+        modal.handleInput('tui.select.pageDown');
+        lines = modal.render(40);
+    }
+
+    expect(lines.join('\n')).toContain(expandedTail);
+    expect(lines.find((line) => line.includes(expandedTail))).toContain('\x1b[7m');
+    expect(lines).toHaveLength(initialHeight);
+    expect(lines.at(-1)).toMatch(/^╰─+╯$/u);
+
+    source.publish([run('active', 'running', `${'activity detail '.repeat(20)}${expandedTail}`)]);
+    expect(modal.render(40).join('\n')).toContain(expandedTail);
+});
+
+it('honors pending navigation when a live update arrives before rendering', () => {
+    const task = Array.from({ length: 10 }, (_, index) => `LINE_${index}`).join('\n');
+    const runs = [run('expanded', 'running', task), run('last', 'queued')];
+    const source = new TestRunSource(runs);
+    const { modal } = setup(source, undefined, undefined, 18);
+    modal.render(40);
+    modal.handleInput('tui.select.confirm');
+    let lines = modal.render(40);
+
+    for (let page = 0; page < 10 && !lines.join('\n').includes('LINE_9'); page++) {
+        modal.handleInput('tui.select.pageDown');
+        lines = modal.render(40);
+    }
+    expect(lines.join('\n')).toContain('LINE_9');
+    modal.handleInput('tui.select.down');
+    modal.render(40);
+    modal.handleInput('tui.select.down');
+    source.publish(runs);
+
+    expect(modal.render(40).join('\n')).toContain('LINE_0');
+});
+
+it('keeps an expanded run within its paging range after the viewport grows', () => {
+    const task = Array.from({ length: 10 }, (_, index) => `LINE_${index}`).join('\n');
+    const source = new TestRunSource([
+        run('expanded', 'running', task),
+        ...Array.from({ length: 10 }, (_, index) => run(`queued-${index}`, 'queued')),
+    ]);
+    const { modal, terminal } = setup(source, undefined, undefined, 18);
+    modal.render(40);
+    modal.handleInput('tui.select.confirm');
+    let lines = modal.render(40);
+
+    for (let page = 0; page < 10 && !lines.join('\n').includes('LINE_9'); page++) {
+        modal.handleInput('tui.select.pageDown');
+        lines = modal.render(40);
+    }
+    expect(lines.join('\n')).toContain('LINE_9');
+    terminal.rows = 24;
+    lines = modal.render(40);
+
+    expect(lines.join('\n')).toContain('LINE_2');
+    expect(lines.join('\n')).toContain('LINE_9');
+});
+
+it('navigates into tall expanded runs from either direction', () => {
+    const expandedTail = 'TALL_EXPANDED_TAIL';
+    const runs = [
+        run('first', 'running'),
+        run('expanded', 'running', `${'expanded row content '.repeat(12)}${expandedTail}`),
+        run('last', 'queued'),
+    ];
+    const source = new TestRunSource(runs);
+    const { modal } = setup(source, undefined, undefined, 18);
+    modal.render(40);
+
+    modal.handleInput('tui.select.down');
+    expect(modal.render(40).join('\n')).toContain('first task');
+    source.publish(runs);
+    expect(modal.render(40).join('\n')).toContain('first task');
+
+    modal.handleInput('tui.select.confirm');
+    modal.render(40);
+    modal.handleInput('tui.select.up');
+    modal.render(40);
+    modal.handleInput('tui.select.pageDown');
+
+    let lines = modal.render(40);
+    expect(lines.find((line) => line.includes('expanded row'))).toContain('\x1b[7m');
+    expect(lines.find((line) => line.includes('last task'))).toBeUndefined();
+
+    modal.handleInput('tui.select.down');
+    modal.render(40);
+    modal.handleInput('tui.select.pageUp');
+    lines = modal.render(40);
+    expect(lines.find((line) => line.includes(expandedTail))).toContain('\x1b[7m');
 });
 
 it('closes when the modal shortcut is pressed again', () => {
@@ -327,8 +464,22 @@ it('updates live, preserves selection by run id, and unsubscribes when disposed'
     expect(lines.find((line) => line.includes('still selected'))).toContain('\x1b[7m');
     expect(requestRender).toHaveBeenCalledTimes(2);
 
+    modal.handleInput('tui.select.confirm');
+    modal.render(40);
+    source.publish([run('new', 'queued'), run('selected', 'running', 'still selected\nEXPANDED')]);
+    source.publish([
+        run('other', 'queued'),
+        run('new', 'queued'),
+        run('selected', 'running', 'still selected\nEXPANDED'),
+    ]);
+    expect(modal.render(40).join('\n')).toContain('EXPANDED');
+
+    source.publish([run('new', 'queued', `${'collapsed content '.repeat(5)}NOT_EXPANDED`)]);
+    expect(modal.render(40).join('\n')).not.toContain('NOT_EXPANDED');
+
+    const renderRequestsBeforeDispose = requestRender.mock.calls.length;
     modal.dispose();
     expect(source.listeners.size).toBe(0);
     source.publish([run('later', 'queued')]);
-    expect(requestRender).toHaveBeenCalledTimes(2);
+    expect(requestRender).toHaveBeenCalledTimes(renderRequestsBeforeDispose);
 });
