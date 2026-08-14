@@ -97,13 +97,13 @@ function setup(
     return { close, modal, requestRender, terminal };
 }
 
-it('lists only active and queued runs and moves the selected row', () => {
+it('lists all runs, reports activity counts, and moves the selected row', () => {
     const source = new TestRunSource([
         run('active', 'running', 'inspect\nactive work'),
         run('queued', 'queued', 'wait for a slot'),
         run('done', 'completed', 'already finished'),
     ]);
-    const { close, modal, requestRender } = setup(source);
+    const { close, modal, requestRender } = setup(source, undefined, undefined, 24);
 
     let lines = modal.render(80);
     expect(lines.join('\n')).toContain('Configuration');
@@ -116,9 +116,10 @@ it('lists only active and queued runs and moves the selected row', () => {
     expect(new Set(settingRows.map((line) => line.indexOf('‹'))).size).toBe(1);
     expect(lines.join('\n')).toContain('1 active');
     expect(lines.join('\n')).toContain('1 queued');
+    expect(lines.join('\n')).toContain('3 total');
     expect(lines.join('\n')).toContain('inspect active work');
     expect(lines.join('\n')).toContain('wait for a slot');
-    expect(lines.join('\n')).not.toContain('already finished');
+    expect(lines.join('\n')).toContain('✓ completed  already finished');
     const emptyPaddedRow = `│${' '.repeat(78)}│`;
     const maxParallelismRow = lines.findIndex((line) => line.includes('Max parallelism'));
     expect(lines.slice(maxParallelismRow + 1, maxParallelismRow + 4)).toEqual([
@@ -155,6 +156,32 @@ it('lists only active and queued runs and moves the selected row', () => {
     modal.handleInput('tui.select.cancel');
     expect(close).toHaveBeenCalledOnce();
     expect(source.listeners.size).toBe(0);
+});
+
+it('keeps a newly completed run ahead of older history', () => {
+    const older = {
+        ...run('older', 'completed', 'older task'),
+        queuedAt: 10,
+        endedAt: 100,
+    };
+    const finishing = { ...run('latest', 'running', 'latest task'), queuedAt: 20 };
+    const active = { ...run('active', 'running', 'active task'), queuedAt: 30 };
+    const source = new TestRunSource([older, finishing, active]);
+    const { modal } = setup(source, undefined, undefined, 24);
+
+    let lines = modal.render(80);
+    expect(lines.find((line) => line.includes('latest task'))).toContain('\x1b[7m');
+
+    source.publish([older, { ...finishing, state: 'completed', endedAt: 200 }, active]);
+    lines = modal.render(80);
+
+    const activeRow = lines.findIndex((line) => line.includes('active task'));
+    const latestRow = lines.findIndex((line) => line.includes('latest task'));
+    const olderRow = lines.findIndex((line) => line.includes('older task'));
+    expect(activeRow).toBeGreaterThan(-1);
+    expect(latestRow).toBeGreaterThan(activeRow);
+    expect(olderRow).toBeGreaterThan(latestRow);
+    expect(lines[latestRow]).toContain('\x1b[7m');
 });
 
 it('expands the selected run without changing modal dimensions or exposing extra data', () => {
@@ -456,21 +483,27 @@ it('updates live, preserves selection by run id, and unsubscribes when disposed'
 
     source.publish([
         run('first', 'completed'),
-        run('selected', 'running', 'still selected'),
+        run('selected', 'completed', 'still selected'),
         run('new', 'queued'),
     ]);
 
     const lines = modal.render(80);
+    expect(lines.join('\n')).toContain('0 active');
+    expect(lines.join('\n')).toContain('1 queued');
+    expect(lines.join('\n')).toContain('3 total');
     expect(lines.find((line) => line.includes('still selected'))).toContain('\x1b[7m');
     expect(requestRender).toHaveBeenCalledTimes(2);
 
     modal.handleInput('tui.select.confirm');
     modal.render(40);
-    source.publish([run('new', 'queued'), run('selected', 'running', 'still selected\nEXPANDED')]);
+    source.publish([
+        run('new', 'queued'),
+        run('selected', 'completed', 'still selected\nEXPANDED'),
+    ]);
     source.publish([
         run('other', 'queued'),
         run('new', 'queued'),
-        run('selected', 'running', 'still selected\nEXPANDED'),
+        run('selected', 'completed', 'still selected\nEXPANDED'),
     ]);
     expect(modal.render(40).join('\n')).toContain('EXPANDED');
 

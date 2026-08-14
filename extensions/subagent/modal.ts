@@ -108,10 +108,17 @@ function stateColor(state: SubagentRunState): 'muted' | 'warning' | 'accent' | '
     }
 }
 
-function activeAndQueuedRuns(
-    source: SubagentRunSource | undefined
-): readonly SubagentRunSnapshot[] {
-    return source?.list().filter((run) => !isTerminalRunState(run.state)) ?? [];
+function currentRunsFirst(source: SubagentRunSource | undefined): readonly SubagentRunSnapshot[] {
+    const current: SubagentRunSnapshot[] = [];
+    const terminal: SubagentRunSnapshot[] = [];
+    for (const run of source?.list() ?? []) {
+        (isTerminalRunState(run.state) ? terminal : current).push(run);
+    }
+    terminal.sort((left, right) => {
+        const completionOrder = (right.endedAt ?? right.queuedAt) - (left.endedAt ?? left.queuedAt);
+        return completionOrder || right.queuedAt - left.queuedAt;
+    });
+    return [...current, ...terminal];
 }
 
 export class SubagentsModal implements Component {
@@ -159,7 +166,7 @@ export class SubagentsModal implements Component {
         this.keybindings = keybindings;
         this.onClose = onClose;
         this.runSource = runSource;
-        this.runs = activeAndQueuedRuns(runSource);
+        this.runs = currentRunsFirst(runSource);
         this.onEnabledChange = options.onEnabledChange;
         this.onThinkingLevelChange = options.onThinkingLevelChange;
         this.onMaxParallelismChange = options.onMaxParallelismChange;
@@ -324,8 +331,11 @@ export class SubagentsModal implements Component {
         const listHeight = Math.max(1, bodyHeight - SECTION_ROWS);
         this.visibleListHeight = listHeight;
         const lines = [titleBorder(), contentRow('')];
-        const activeCount = this.runs.filter((run) => run.state !== 'queued').length;
-        const queuedCount = this.runs.length - activeCount;
+        const totalCount = this.runs.length;
+        const queuedCount = this.runs.filter((run) => run.state === 'queued').length;
+        const activeCount = this.runs.filter(
+            (run) => !isTerminalRunState(run.state) && run.state !== 'queued'
+        ).length;
 
         lines.push(
             contentRow(
@@ -373,7 +383,7 @@ export class SubagentsModal implements Component {
             contentRow(
                 this.renderSectionHeader(
                     'Activity',
-                    `${this.theme.fg('accent', '●')} ${activeCount} active  ${queuedCount} queued`,
+                    `${this.theme.fg('accent', '●')} ${activeCount} active  ${queuedCount} queued  ${totalCount} total`,
                     this.focusedSection === 'activity'
                 )
             )
@@ -389,9 +399,7 @@ export class SubagentsModal implements Component {
             for (let row = 0; row < listHeight; row++) {
                 lines.push(
                     contentRow(
-                        row === emptyRow
-                            ? this.theme.fg('muted', 'No active or queued subagents')
-                            : '',
+                        row === emptyRow ? this.theme.fg('muted', 'No subagent activity') : '',
                         'center'
                     )
                 );
@@ -516,7 +524,7 @@ export class SubagentsModal implements Component {
         const selectedViewportOffset = selectedSpan
             ? selectedSpan.start - this.activityScrollTop
             : undefined;
-        const nextRuns = activeAndQueuedRuns(this.runSource);
+        const nextRuns = currentRunsFirst(this.runSource);
         this.runs = nextRuns;
 
         const selectedRunIndex = selectedId
