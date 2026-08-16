@@ -12,9 +12,9 @@ import { isTerminalRunState } from './run-store.ts';
 import { type ConfiguredSubagentThinkingLevel, cycleSubagentThinkingLevel } from './thinking.ts';
 import type { SubagentRunSnapshot, SubagentRunState } from './types.ts';
 
-const TARGET_HEIGHT_RATIO = 0.88;
-const FULL_MODAL_HEIGHT = 14;
-const SECTION_ROWS = 10;
+const TARGET_HEIGHT_RATIO = 0.93;
+const FULL_MODAL_HEIGHT = 15;
+const SECTION_ROWS = 11;
 const SUBAGENT_MODAL_SHORTCUT = Key.ctrlAlt('s');
 
 type ModalSection = 'activity' | 'configuration';
@@ -69,6 +69,19 @@ function padToWidth(
 
     if (!background) return `${leftAndContent}${rightPadding}`;
     return `${background(leftAndContent)}${rightPadding ? background(rightPadding) : ''}`;
+}
+
+function compactKeyLabel(key: string | undefined): string | undefined {
+    if (!key) return undefined;
+
+    const labels: Record<string, string> = {
+        up: '↑',
+        down: '↓',
+        left: '←',
+        right: '→',
+        escape: 'esc',
+    };
+    return labels[key] ?? key;
 }
 
 function stateMarker(state: SubagentRunState): string {
@@ -203,10 +216,23 @@ export class SubagentsModal implements Component {
         }
         if (this.runs.length === 0) return;
 
-        if (this.keybindings.matches(data, 'tui.select.confirm')) {
-            const selectedRun = this.runs[this.selectedIndex];
-            if (!selectedRun) return;
-            this.expandedRunId = this.expandedRunId === selectedRun.id ? undefined : selectedRun.id;
+        const selectedRun = this.runs[this.selectedIndex];
+        const matchesNavigation = (
+            [
+                'tui.select.up',
+                'tui.select.down',
+                'tui.select.pageUp',
+                'tui.select.pageDown',
+            ] as const
+        ).some((action) => this.keybindings.matches(data, action));
+        const expand = !matchesNavigation && matchesKey(data, Key.right);
+        const collapse = !matchesNavigation && matchesKey(data, Key.left);
+        if (
+            selectedRun &&
+            ((expand && this.expandedRunId !== selectedRun.id) ||
+                (collapse && this.expandedRunId === selectedRun.id))
+        ) {
+            this.expandedRunId = expand ? selectedRun.id : undefined;
             this.pendingSelectedViewportOffset = undefined;
             this.revealSelectedRun = 'start';
             this.relayoutActivityRuns();
@@ -274,8 +300,8 @@ export class SubagentsModal implements Component {
             return `${border('│')} ${padded} ${border('│')}`;
         };
 
-        const cancelKeys = this.keybindings.getKeys('tui.select.cancel').join('/');
-        const closeHint = cancelKeys ? `${cancelKeys} close` : 'close unbound';
+        const closeKey = compactKeyLabel(this.keybindings.getKeys('tui.select.cancel')[0]);
+        const closeHint = closeKey ? `${closeKey} close` : 'close unbound';
 
         if (height === 1) {
             return [
@@ -388,6 +414,7 @@ export class SubagentsModal implements Component {
                 )
             )
         );
+        lines.push(contentRow(''));
 
         const contentWidth = Math.max(0, innerWidth - 2);
         this.activityContentWidth = contentWidth;
@@ -418,27 +445,24 @@ export class SubagentsModal implements Component {
             }
         }
 
-        const upKeys = this.keybindings.getKeys('tui.select.up').join('/');
-        const downKeys = this.keybindings.getKeys('tui.select.down').join('/');
-        const navigationKeys =
-            upKeys || downKeys
-                ? [upKeys, downKeys].filter(Boolean).join('/')
-                : 'navigation unbound';
         const position =
             this.runs.length > 1 && this.activityLineCount > listHeight
                 ? ` · ${this.selectedIndex + 1}/${this.runs.length}`
                 : '';
         const tabKeys = this.keybindings.getKeys('tui.input.tab').join('/');
         const sectionHint = tabKeys ? `${tabKeys} section · ` : 'section unbound · ';
-        const confirmKeys = this.keybindings.getKeys('tui.select.confirm').join('/');
-        const expandAction =
-            this.runs[this.selectedIndex]?.id === this.expandedRunId ? 'collapse' : 'expand';
-        const expandHint = confirmKeys ? `${confirmKeys} ${expandAction} · ` : '';
+        const upKey = compactKeyLabel(this.keybindings.getKeys('tui.select.up')[0]);
+        const downKey = compactKeyLabel(this.keybindings.getKeys('tui.select.down')[0]);
+        const selectionKeys = [upKey, downKey].filter(Boolean).join('/');
+        const selectionHint = selectionKeys
+            ? `${selectionKeys} select · `
+            : 'navigation unbound · ';
+        const expanded = this.runs[this.selectedIndex]?.id === this.expandedRunId;
         const navigationHint =
             this.focusedSection === 'configuration'
-                ? `${navigationKeys} select · ←/→ change · `
+                ? `${selectionHint}←/→ change · `
                 : this.runs.length > 0
-                  ? `${navigationKeys} select · ${expandHint}`
+                  ? `${selectionHint}${expanded ? '← collapse' : '→ expand'} · `
                   : '';
         lines.push(
             contentRow(
@@ -466,7 +490,7 @@ export class SubagentsModal implements Component {
         );
         // Match the overlay's maxHeight so it never slices off structural rows such
         // as the close hint or bottom border.
-        const availableHeight = Math.max(1, Math.floor(terminalRows * 0.9));
+        const availableHeight = Math.max(1, Math.floor(terminalRows * 0.95));
         return Math.min(targetHeight, availableHeight);
     }
 
@@ -763,8 +787,8 @@ export async function openSubagentsModal(
             overlay: true,
             overlayOptions: {
                 anchor: 'center',
-                width: '94%',
-                maxHeight: '90%',
+                width: '95%',
+                maxHeight: '95%',
                 margin: 0,
             },
         }

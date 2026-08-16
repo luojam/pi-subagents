@@ -117,6 +117,11 @@ it('lists all runs, reports activity counts, and moves the selected row', () => 
     expect(lines.join('\n')).toContain('1 active');
     expect(lines.join('\n')).toContain('1 queued');
     expect(lines.join('\n')).toContain('3 total');
+    const activityRow = lines.findIndex((line) => line.includes('Activity'));
+    expect(lines[activityRow + 1]).toBe(`│${' '.repeat(78)}│`);
+    expect(lines.join('\n')).toContain('↑/↓ select · → expand · esc close');
+    expect(lines.join('\n')).not.toContain('enter expand');
+    expect(lines.join('\n')).not.toContain('escape/ctrl+c close');
     expect(lines.join('\n')).toContain('inspect active work');
     expect(lines.join('\n')).toContain('wait for a slot');
     expect(lines.join('\n')).toContain('✓ completed  already finished');
@@ -202,6 +207,10 @@ it('expands the selected run without changing modal dimensions or exposing extra
     expect(collapsed.join('\n')).not.toContain(expandedTail);
 
     modal.handleInput('tui.select.confirm');
+    expect(modal.render(40).join('\n')).not.toContain(expandedTail);
+    expect(requestRender).not.toHaveBeenCalled();
+
+    modal.handleInput('\x1b[C');
     const expanded = modal.render(40);
     expect(requestRender).toHaveBeenCalledOnce();
     expect(expanded.join('\n')).toContain(expandedTail);
@@ -210,8 +219,9 @@ it('expands the selected run without changing modal dimensions or exposing extra
     expect(expanded).toHaveLength(collapsed.length);
     expect(expanded.every((line) => visibleWidth(line) === 40)).toBe(true);
     expect(expanded.at(-1)).toMatch(/^╰─+╯$/u);
+    expect(modal.render(80).join('\n')).toContain('↑/↓ select · ← collapse · esc close');
 
-    modal.handleInput('tui.select.confirm');
+    modal.handleInput('\x1b[D');
     expect(modal.render(40).join('\n')).not.toContain(expandedTail);
 });
 
@@ -223,7 +233,7 @@ it('pages through an expanded run that is taller than the activity viewport', ()
     const { modal } = setup(source, undefined, undefined, 18);
     const initialHeight = modal.render(40).length;
 
-    modal.handleInput('tui.select.confirm');
+    modal.handleInput('\x1b[C');
     let lines = modal.render(40);
     expect(lines.join('\n')).not.toContain(expandedTail);
 
@@ -247,7 +257,7 @@ it('honors pending navigation when a live update arrives before rendering', () =
     const source = new TestRunSource(runs);
     const { modal } = setup(source, undefined, undefined, 18);
     modal.render(40);
-    modal.handleInput('tui.select.confirm');
+    modal.handleInput('\x1b[C');
     let lines = modal.render(40);
 
     for (let page = 0; page < 10 && !lines.join('\n').includes('LINE_9'); page++) {
@@ -271,7 +281,7 @@ it('keeps an expanded run within its paging range after the viewport grows', () 
     ]);
     const { modal, terminal } = setup(source, undefined, undefined, 18);
     modal.render(40);
-    modal.handleInput('tui.select.confirm');
+    modal.handleInput('\x1b[C');
     let lines = modal.render(40);
 
     for (let page = 0; page < 10 && !lines.join('\n').includes('LINE_9'); page++) {
@@ -282,7 +292,7 @@ it('keeps an expanded run within its paging range after the viewport grows', () 
     terminal.rows = 24;
     lines = modal.render(40);
 
-    expect(lines.join('\n')).toContain('LINE_2');
+    expect(lines.join('\n')).toContain('LINE_3');
     expect(lines.join('\n')).toContain('LINE_9');
 });
 
@@ -298,11 +308,11 @@ it('navigates into tall expanded runs from either direction', () => {
     modal.render(40);
 
     modal.handleInput('tui.select.down');
-    expect(modal.render(40).join('\n')).toContain('first task');
+    expect(modal.render(40).find((line) => line.includes('expanded row'))).toContain('\x1b[7m');
     source.publish(runs);
-    expect(modal.render(40).join('\n')).toContain('first task');
+    expect(modal.render(40).find((line) => line.includes('expanded row'))).toContain('\x1b[7m');
 
-    modal.handleInput('tui.select.confirm');
+    modal.handleInput('\x1b[C');
     modal.render(40);
     modal.handleInput('tui.select.up');
     modal.render(40);
@@ -338,10 +348,10 @@ it('keeps rendered rows within extremely narrow widths', () => {
 });
 
 it('renders every control at the minimum full modal height', () => {
-    const { modal } = setup(new TestRunSource([]), undefined, undefined, 16);
+    const { modal } = setup(new TestRunSource([]), undefined, undefined, 17);
     const lines = modal.render(80);
 
-    expect(lines).toHaveLength(14);
+    expect(lines).toHaveLength(15);
     expect(lines.join('\n')).toContain('Subagent tool');
     expect(lines.join('\n')).toContain('Reasoning level');
     expect(lines.join('\n')).toContain('Max parallelism');
@@ -477,7 +487,7 @@ it('updates a displayed setting only after its callback succeeds', () => {
 
 it('updates live, preserves selection by run id, and unsubscribes when disposed', () => {
     const source = new TestRunSource([run('first', 'running'), run('selected', 'queued')]);
-    const { modal, requestRender } = setup(source);
+    const { modal, requestRender } = setup(source, undefined, undefined, 19);
     modal.render(80);
     modal.handleInput('tui.select.down');
 
@@ -494,7 +504,7 @@ it('updates live, preserves selection by run id, and unsubscribes when disposed'
     expect(lines.find((line) => line.includes('still selected'))).toContain('\x1b[7m');
     expect(requestRender).toHaveBeenCalledTimes(2);
 
-    modal.handleInput('tui.select.confirm');
+    modal.handleInput('\x1b[C');
     modal.render(40);
     source.publish([
         run('new', 'queued'),
