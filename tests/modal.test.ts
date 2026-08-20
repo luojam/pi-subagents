@@ -189,7 +189,7 @@ it('keeps a newly completed run ahead of older history', () => {
     expect(lines[latestRow]).toContain('\x1b[7m');
 });
 
-it('expands the selected run without changing modal dimensions or exposing extra data', () => {
+it('expands the selected run without changing modal dimensions or exposing response data', () => {
     const expandedTail = 'EXPANDED_TASK_TAIL';
     const source = new TestRunSource([
         {
@@ -292,8 +292,8 @@ it('keeps an expanded run within its paging range after the viewport grows', () 
     terminal.rows = 24;
     lines = modal.render(40);
 
-    expect(lines.join('\n')).toContain('LINE_3');
     expect(lines.join('\n')).toContain('LINE_9');
+    expect(lines.join('\n')).toContain('Runtime');
 });
 
 it('navigates into tall expanded runs from either direction', () => {
@@ -326,7 +326,43 @@ it('navigates into tall expanded runs from either direction', () => {
     modal.render(40);
     modal.handleInput('tui.select.pageUp');
     lines = modal.render(40);
+    for (let page = 0; page < 10 && !lines.join('\n').includes(expandedTail); page++) {
+        modal.handleInput('tui.select.pageUp');
+        lines = modal.render(40);
+    }
     expect(lines.find((line) => line.includes(expandedTail))).toContain('\x1b[7m');
+});
+
+it('shows runtime and stats for an expanded run', () => {
+    const source = new TestRunSource([
+        {
+            ...run('active', 'running'),
+            sessionFile: '/tmp/subagent.jsonl',
+            elapsedMs: 65_000,
+            contextUsage: { tokens: 1_500, contextWindow: 8_000, percent: 18.75 },
+            usage: {
+                input: 1_200,
+                output: 345,
+                cacheRead: 678,
+                cacheWrite: 90,
+                total: 2_313,
+                cost: 0.0123,
+            },
+        },
+    ]);
+    const { modal } = setup(source, undefined, undefined, 40);
+    modal.render(100);
+
+    modal.handleInput('\x1b[C');
+    const expanded = modal.render(100).join('\n');
+
+    expect(expanded).toContain('Runtime');
+    expect(expanded).toContain('cwd: /project');
+    expect(expanded).toContain('model: test/model · thinking off');
+    expect(expanded).toContain('transcript: /tmp/subagent.jsonl');
+    expect(expanded).toContain('Stats');
+    expect(expanded).toContain('1.5k/8k (19%) · 1m 5s');
+    expect(expanded).toContain('↑1.2k ↓345 · R678 W90 · $0.0123');
 });
 
 it('closes when the modal shortcut is pressed again', () => {

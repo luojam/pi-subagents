@@ -1,5 +1,3 @@
-import { homedir } from 'node:os';
-import { sep } from 'node:path';
 import type { AgentToolResult } from '@earendil-works/pi-agent-core';
 import { keyHint, keyText, type Theme } from '@earendil-works/pi-coding-agent';
 import {
@@ -8,6 +6,12 @@ import {
     visibleWidth,
     wrapTextWithAnsi,
 } from '@earendil-works/pi-tui';
+import {
+    formatElapsed,
+    formatSubagentContext,
+    formatSubagentRuntime,
+    formatSubagentStats,
+} from './formatting/run-details.ts';
 import { sanitizeTerminalText } from './formatting/terminal-sanitizer.ts';
 import { truncateUtf8Head, truncateUtf8Tail } from './formatting/utf8.ts';
 import type { SubagentRunSnapshot, SubagentRunState, SubagentToolCallSnapshot } from './types.ts';
@@ -179,49 +183,6 @@ function boundedMultilineLines(
     return lines;
 }
 
-export function formatCost(cost: number): string {
-    if (!Number.isFinite(cost) || cost < 0) return 'cost ?';
-    if (cost === 0) return '$0';
-    if (cost < 0.0001) return '<$0.0001';
-    return `$${cost.toFixed(cost < 1 ? 4 : 2)}`;
-}
-
-export function formatTokens(tokens: number): string {
-    if (!Number.isFinite(tokens) || tokens < 0) return '?';
-    if (tokens < 1_000) return Math.round(tokens).toString();
-    if (tokens < 999_500) {
-        const value = tokens / 1_000;
-        return `${value >= 10 ? Math.round(value) : value.toFixed(1).replace(/\.0$/u, '')}k`;
-    }
-    const value = tokens / 1_000_000;
-    return `${value >= 10 ? Math.round(value) : value.toFixed(1).replace(/\.0$/u, '')}M`;
-}
-
-export function formatElapsed(milliseconds: number): string {
-    if (!Number.isFinite(milliseconds) || milliseconds < 0) return 'elapsed ?';
-    const seconds = Math.floor(milliseconds / 1_000);
-    if (seconds < 60) return `${seconds}s`;
-    const minutes = Math.floor(seconds / 60);
-    const remainder = seconds % 60;
-    if (minutes < 60) return `${minutes}m${remainder ? ` ${remainder}s` : ''}`;
-    const hours = Math.floor(minutes / 60);
-    const minuteRemainder = minutes % 60;
-    return `${hours}h${minuteRemainder ? ` ${minuteRemainder}m` : ''}`;
-}
-
-function formatContext(snapshot: SubagentRunSnapshot, includeUnknown: boolean): string | undefined {
-    const usage = snapshot.contextUsage;
-    if (!usage || (usage.tokens === null && !includeUnknown)) return undefined;
-    const tokens = usage.tokens === null ? '?' : formatTokens(usage.tokens);
-    const percent =
-        usage.percent === null
-            ? includeUnknown
-                ? ' (?%)'
-                : ''
-            : ` (${Math.round(usage.percent)}%)`;
-    return `${tokens}/${formatTokens(usage.contextWindow)}${percent}`;
-}
-
 function stateLabel(state: SubagentRunState): string {
     return state;
 }
@@ -291,7 +252,7 @@ function toolSummary(snapshot: SubagentRunSnapshot): string | undefined {
 }
 
 function snapshotStats(snapshot: SubagentRunSnapshot): string {
-    return [formatContext(snapshot, false), formatElapsed(snapshot.elapsedMs)]
+    return [formatSubagentContext(snapshot, false), formatElapsed(snapshot.elapsedMs)]
         .filter((part): part is string => !!part)
         .join(' · ');
 }
@@ -454,23 +415,6 @@ function activityLine(tool: SubagentToolCallSnapshot, current: boolean, theme: T
     );
 }
 
-function usageLine(snapshot: SubagentRunSnapshot): string | undefined {
-    if (!snapshot.usage) return undefined;
-    const usage = snapshot.usage;
-    return [
-        [`↑${formatTokens(usage.input)}`, `↓${formatTokens(usage.output)}`].join(' '),
-        [`R${formatTokens(usage.cacheRead)}`, `W${formatTokens(usage.cacheWrite)}`].join(' '),
-        formatCost(usage.cost),
-    ].join(' · ');
-}
-
-function compactCwd(cwd: string): string {
-    const safe = boundedLine(cwd, FALLBACK_MAX_BYTES);
-    const home = homedir();
-    if (safe === home) return '~';
-    return safe.startsWith(`${home}${sep}`) ? `~${safe.slice(home.length)}` : safe;
-}
-
 function addSection(
     lines: string[],
     label: string,
@@ -503,14 +447,7 @@ function expandedSnapshotLines(
         );
     }
 
-    const runtime = [
-        snapshot.cwd ? `cwd: ${compactCwd(snapshot.cwd)}` : undefined,
-        snapshot.model.provider && snapshot.model.id
-            ? `model: ${boundedLine(`${snapshot.model.provider}/${snapshot.model.id}`, FALLBACK_MAX_BYTES)} · thinking ${boundedLine(snapshot.thinkingLevel, 128)}`
-            : undefined,
-        snapshot.sessionFile ? `transcript: ${compactCwd(snapshot.sessionFile)}` : undefined,
-    ].filter((line): line is string => !!line);
-    addSection(lines, 'Runtime', runtime, theme, 'muted');
+    addSection(lines, 'Runtime', formatSubagentRuntime(snapshot), theme, 'muted');
 
     const tools = [
         ...(snapshot.currentTool ? [activityLine(snapshot.currentTool, true, theme)] : []),
@@ -548,11 +485,7 @@ function expandedSnapshotLines(
         );
     }
 
-    const contextAndElapsed = [formatContext(snapshot, true), formatElapsed(snapshot.elapsedMs)]
-        .filter((part): part is string => !!part)
-        .join(' · ');
-    const stats = [contextAndElapsed, usageLine(snapshot)].filter((part): part is string => !!part);
-    addSection(lines, 'Stats', stats, theme, 'dim');
+    addSection(lines, 'Stats', formatSubagentStats(snapshot), theme, 'dim');
 
     if (
         (snapshot.state === 'failed' ||

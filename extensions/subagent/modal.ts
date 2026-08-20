@@ -8,6 +8,7 @@ import {
     visibleWidth,
     wrapTextWithAnsi,
 } from '@earendil-works/pi-tui';
+import { formatSubagentRuntime, formatSubagentStats } from './formatting/run-details.ts';
 import { isTerminalRunState } from './run-store.ts';
 import { type ConfiguredSubagentThinkingLevel, cycleSubagentThinkingLevel } from './thinking.ts';
 import type { SubagentRunSnapshot, SubagentRunState } from './types.ts';
@@ -750,20 +751,48 @@ export class SubagentsModal implements Component {
         const inlineTaskWidth = width - headingWidth;
         const taskColor = selected ? 'text' : 'muted';
 
+        let taskLines: string[];
         if (inlineTaskWidth >= 8) {
             const wrappedTask = this.wrapTask(task, inlineTaskWidth);
-            return wrappedTask.map((line, index) => {
+            taskLines = wrappedTask.map((line, index) => {
                 const indentation = index === 0 ? heading : ' '.repeat(headingWidth);
                 return `${indentation}${this.theme.fg(taskColor, line)}`;
             });
+        } else {
+            const indentationWidth = Math.min(4, Math.max(0, width - 1));
+            const indentation = ' '.repeat(indentationWidth);
+            const wrappedTask = this.wrapTask(task, Math.max(1, width - indentationWidth));
+            taskLines = [
+                `${prefix}${status}`,
+                ...wrappedTask.map((line) => `${indentation}${this.theme.fg(taskColor, line)}`),
+            ];
         }
 
-        const indentationWidth = Math.min(4, Math.max(0, width - 1));
-        const indentation = ' '.repeat(indentationWidth);
-        const wrappedTask = this.wrapTask(task, Math.max(1, width - indentationWidth));
         return [
-            `${prefix}${status}`,
-            ...wrappedTask.map((line) => `${indentation}${this.theme.fg(taskColor, line)}`),
+            ...taskLines,
+            ...this.renderExpandedSection('Runtime', formatSubagentRuntime(run), width, 'muted'),
+            ...this.renderExpandedSection('Stats', formatSubagentStats(run), width, 'dim'),
+        ];
+    }
+
+    private renderExpandedSection(
+        label: string,
+        details: readonly string[],
+        width: number,
+        color: 'muted' | 'dim'
+    ): string[] {
+        if (details.length === 0) return [];
+        const labelIndentation = ' '.repeat(Math.min(4, Math.max(0, width - 1)));
+        const detailIndentation = ' '.repeat(Math.min(6, Math.max(0, width - 1)));
+        const detailWidth = Math.max(1, width - detailIndentation.length);
+        return [
+            '',
+            `${labelIndentation}${this.theme.fg('accent', label)}`,
+            ...details.flatMap((detail) =>
+                this.wrapTask(detail, detailWidth).map(
+                    (line) => `${detailIndentation}${this.theme.fg(color, line)}`
+                )
+            ),
         ];
     }
 
