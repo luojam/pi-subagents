@@ -78,6 +78,8 @@ function setup(
             const keys: Record<string, string[]> = {
                 'tui.select.up': ['up'],
                 'tui.select.down': ['down'],
+                'tui.select.pageUp': ['pageUp'],
+                'tui.select.pageDown': ['pageDown'],
                 'tui.select.cancel': ['escape'],
                 'tui.select.confirm': ['enter'],
                 'tui.input.tab': ['tab'],
@@ -189,7 +191,7 @@ it('keeps a newly completed run ahead of older history', () => {
     expect(lines[latestRow]).toContain('\x1b[7m');
 });
 
-it('expands the selected run without changing modal dimensions or exposing response data', () => {
+it('expands the selected run without changing modal dimensions', () => {
     const expandedTail = 'EXPANDED_TASK_TAIL';
     const source = new TestRunSource([
         {
@@ -198,7 +200,6 @@ it('expands the selected run without changing modal dimensions or exposing respo
                 'running',
                 `inspect ${'wrapped task content '.repeat(4)}\n${expandedTail}`
             ),
-            responseTail: 'HIDDEN_RESPONSE_TAIL',
         },
     ]);
     const { modal, requestRender } = setup(source, undefined, undefined, 24);
@@ -214,7 +215,6 @@ it('expands the selected run without changing modal dimensions or exposing respo
     const expanded = modal.render(40);
     expect(requestRender).toHaveBeenCalledOnce();
     expect(expanded.join('\n')).toContain(expandedTail);
-    expect(expanded.join('\n')).not.toContain('HIDDEN_RESPONSE_TAIL');
     expect(expanded.find((line) => line.includes(expandedTail))).toContain('\x1b[7m');
     expect(expanded).toHaveLength(collapsed.length);
     expect(expanded.every((line) => visibleWidth(line) === 40)).toBe(true);
@@ -231,9 +231,12 @@ it('pages through an expanded run that is taller than the activity viewport', ()
         run('active', 'running', `${'activity detail '.repeat(20)}${expandedTail}`),
     ]);
     const { modal } = setup(source, undefined, undefined, 18);
-    const initialHeight = modal.render(40).length;
+    const initialLines = modal.render(100);
+    const initialHeight = initialLines.length;
+    expect(initialLines.join('\n')).not.toContain('pgup/pgdn scroll');
 
     modal.handleInput('\x1b[C');
+    expect(modal.render(100).join('\n')).toContain('pgup/pgdn scroll');
     let lines = modal.render(40);
     expect(lines.join('\n')).not.toContain(expandedTail);
 
@@ -333,6 +336,83 @@ it('navigates into tall expanded runs from either direction', () => {
     expect(lines.find((line) => line.includes(expandedTail))).toContain('\x1b[7m');
 });
 
+it('shows activity, reasoning, and response details for an expanded run', () => {
+    const currentTool = {
+        id: 'current',
+        name: 'bash',
+        inputSummary: 'npm test',
+        progressSummary: '3 tests passed',
+        state: 'running' as const,
+        startedAt: 1,
+    };
+    const source = new TestRunSource([
+        {
+            ...run('active', 'running'),
+            currentTool,
+            recentToolCalls: [
+                currentTool,
+                {
+                    id: 'completed',
+                    name: 'read',
+                    inputSummary: 'src/index.ts',
+                    state: 'completed',
+                    startedAt: 1,
+                    endedAt: 2,
+                },
+                {
+                    id: 'failed',
+                    name: 'grep',
+                    inputSummary: '/missing/',
+                    state: 'failed',
+                    startedAt: 1,
+                    endedAt: 2,
+                },
+                {
+                    id: 'omitted',
+                    name: 'read',
+                    inputSummary: 'old-activity.ts',
+                    state: 'completed',
+                    startedAt: 1,
+                    endedAt: 2,
+                },
+            ],
+            thinkingTail: 'check the implementation\nthen verify the result',
+            responseTail: 'Implemented the change.\nAll tests pass.',
+        },
+    ]);
+    const { modal } = setup(source, undefined, undefined, 50);
+    const collapsed = modal.render(100).join('\n');
+    expect(collapsed).not.toContain('$ npm test');
+    expect(collapsed).not.toContain('check the implementation');
+    expect(collapsed).not.toContain('Implemented the change.');
+
+    modal.handleInput('\x1b[C');
+    const expanded = modal.render(100).join('\n');
+
+    expect(expanded).toContain('Activity');
+    expect(expanded).toContain('→ $ npm test · 3 tests passed');
+    expect(expanded.match(/\$ npm test/gu)).toHaveLength(1);
+    expect(expanded).toContain('✓ read src/index.ts');
+    expect(expanded).toContain('✗ grep /missing/');
+    expect(expanded).not.toContain('old-activity.ts');
+    expect(expanded).toContain('Thinking tail (provider-exposed)');
+    expect(expanded).toContain('check the implementation');
+    expect(expanded).toContain('then verify the result');
+    expect(expanded).toContain('Response tail');
+    expect(expanded).toContain('Implemented the change.');
+    expect(expanded).toContain('All tests pass.');
+
+    const lines = expanded.split('\n');
+    const row = (text: string) => lines.findIndex((line) => line.includes(text));
+    const rowAfter = (text: string, index: number) =>
+        lines.findIndex((line, lineIndex) => lineIndex > index && line.includes(text));
+    expect(row('Runtime')).toBe(row('active task') + 1);
+    expect(rowAfter('Activity', row('Runtime'))).toBe(row('model: test/model') + 1);
+    expect(row('Thinking tail (provider-exposed)')).toBe(row('✗ grep /missing/') + 1);
+    expect(row('Response tail')).toBe(row('then verify the result') + 1);
+    expect(row('Stats')).toBe(row('All tests pass.') + 1);
+});
+
 it('shows runtime and stats for an expanded run', () => {
     const source = new TestRunSource([
         {
@@ -358,7 +438,7 @@ it('shows runtime and stats for an expanded run', () => {
 
     expect(expanded).toContain('Runtime');
     expect(expanded).toContain('cwd: /project');
-    expect(expanded).toContain('model: test/model · thinking off');
+    expect(expanded).toContain('model: test/model · off');
     expect(expanded).toContain('transcript: /tmp/subagent.jsonl');
     expect(expanded).toContain('Stats');
     expect(expanded).toContain('1.5k/8k (19%) · 1m 5s');

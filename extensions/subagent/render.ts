@@ -7,21 +7,23 @@ import {
     wrapTextWithAnsi,
 } from '@earendil-works/pi-tui';
 import {
+    type FormattedSubagentActivity,
     formatElapsed,
+    formatSubagentActivity,
     formatSubagentContext,
     formatSubagentRuntime,
     formatSubagentStats,
+    formatSubagentTextTail,
+    formatToolCallSummary,
 } from './formatting/run-details.ts';
 import { sanitizeTerminalText } from './formatting/terminal-sanitizer.ts';
-import { truncateUtf8Head, truncateUtf8Tail } from './formatting/utf8.ts';
+import { truncateUtf8Head } from './formatting/utf8.ts';
 import type { SubagentRunSnapshot, SubagentRunState, SubagentToolCallSnapshot } from './types.ts';
 
 const TASK_SUMMARY_MAX_BYTES = 512;
-const TOOL_SUMMARY_MAX_BYTES = 1_024;
 const FALLBACK_MAX_BYTES = 2 * 1_024;
 const EXPANDED_TEXT_MAX_BYTES = 8 * 1_024;
 const TASK_MAX_LINES = 8;
-const TAIL_MAX_LINES = 16;
 const COLLAPSED_MAX_COLUMNS = 100;
 const TRUNCATED_TASK_END_PADDING_COLUMNS = 3;
 
@@ -148,33 +150,15 @@ function boundedLine(text: string, maxBytes: number): string {
     return truncateUtf8Head(sanitizeSingleLine(text), maxBytes);
 }
 
-function boundedMultilineLines(
-    text: string,
-    maxBytes: number,
-    maxLines: number,
-    fromTail = false
-): string[] {
+function boundedMultilineLines(text: string, maxBytes: number, maxLines: number): string[] {
     const safe = safeMultiline(text);
     const byteTruncated = Buffer.byteLength(safe, 'utf8') > maxBytes;
-    const bounded = fromTail ? truncateUtf8Tail(safe, maxBytes) : truncateUtf8Head(safe, maxBytes);
+    const bounded = truncateUtf8Head(safe, maxBytes);
     const allLines = bounded.split('\n');
-    const lines =
-        allLines.length <= maxLines
-            ? allLines
-            : fromTail
-              ? allLines.slice(-maxLines)
-              : allLines.slice(0, maxLines);
+    const lines = allLines.slice(0, maxLines);
     const omittedLineCount = Math.max(0, allLines.length - maxLines);
 
-    if (fromTail && (byteTruncated || omittedLineCount > 0)) {
-        return [
-            byteTruncated
-                ? '… earlier content omitted'
-                : `… ${omittedLineCount} earlier lines omitted`,
-            ...lines,
-        ];
-    }
-    if (!fromTail && (byteTruncated || omittedLineCount > 0)) {
+    if (byteTruncated || omittedLineCount > 0) {
         return [
             ...lines,
             byteTruncated ? '… more content omitted' : `… ${omittedLineCount} more lines omitted`,
@@ -223,22 +207,6 @@ function stateColor(state: SubagentRunState): 'muted' | 'warning' | 'accent' | '
             return 'error';
         case 'cancelled':
             return 'warning';
-    }
-}
-
-export function formatToolCallSummary(tool: SubagentToolCallSnapshot): string {
-    const name = boundedLine(tool.name, 128) || 'tool';
-    const input = boundedLine(tool.inputSummary, TOOL_SUMMARY_MAX_BYTES);
-    switch (name) {
-        case 'bash':
-            return input ? `$ ${input}` : '$';
-        case 'read':
-        case 'edit':
-        case 'write':
-        case 'grep':
-            return input ? `${name} ${input}` : name;
-        default:
-            return input ? `${name} ${input}` : name;
     }
 }
 
@@ -390,29 +358,16 @@ export function renderSubagentCall(
     );
 }
 
-function activityLine(tool: SubagentToolCallSnapshot, current: boolean, theme: Theme): string {
-    const isCurrent = current && tool.state === 'running';
-    const marker = isCurrent
-        ? '→'
-        : tool.state === 'completed'
-          ? '✓'
-          : tool.state === 'failed'
-            ? '✗'
-            : '…';
-    const color = isCurrent
-        ? 'accent'
-        : tool.state === 'completed'
-          ? 'success'
-          : tool.state === 'failed'
-            ? 'error'
-            : 'warning';
-    const progress =
-        isCurrent && tool.progressSummary
-            ? ` · ${boundedLine(tool.progressSummary, TOOL_SUMMARY_MAX_BYTES)}`
-            : '';
-    return (
-        theme.fg(color, marker) + theme.fg('muted', ` ${formatToolCallSummary(tool)}${progress}`)
-    );
+function activityLine(activity: FormattedSubagentActivity, theme: Theme): string {
+    const color =
+        activity.status === 'current'
+            ? 'accent'
+            : activity.status === 'completed'
+              ? 'success'
+              : activity.status === 'failed'
+                ? 'error'
+                : 'warning';
+    return theme.fg(color, activity.marker) + theme.fg('muted', ` ${activity.text}`);
 }
 
 function addSection(
@@ -449,24 +404,14 @@ function expandedSnapshotLines(
 
     addSection(lines, 'Runtime', formatSubagentRuntime(snapshot), theme, 'muted');
 
-    const tools = [
-        ...(snapshot.currentTool ? [activityLine(snapshot.currentTool, true, theme)] : []),
-        ...snapshot.recentToolCalls
-            .filter((tool) => tool.id !== snapshot.currentTool?.id)
-            .map((tool) => activityLine(tool, false, theme)),
-    ];
-    addSection(lines, 'Activity', tools, theme);
+    const activity = formatSubagentActivity(snapshot).map((item) => activityLine(item, theme));
+    addSection(lines, 'Activity', activity, theme);
 
     if (snapshot.thinkingTail.trim()) {
         addSection(
             lines,
             'Thinking tail (provider-exposed)',
-            boundedMultilineLines(
-                snapshot.thinkingTail,
-                EXPANDED_TEXT_MAX_BYTES,
-                TAIL_MAX_LINES,
-                true
-            ).filter((line) => line.trim() !== ''),
+            formatSubagentTextTail(snapshot.thinkingTail).filter((line) => line.trim() !== ''),
             theme,
             'dim'
         );
@@ -476,13 +421,7 @@ function expandedSnapshotLines(
     const finalText = fallback?.type === 'text' ? fallback.text : '';
     const response = snapshot.responseTail || (snapshot.state === 'completed' ? finalText : '');
     if (response.trim()) {
-        addSection(
-            lines,
-            'Response tail',
-            boundedMultilineLines(response, EXPANDED_TEXT_MAX_BYTES, TAIL_MAX_LINES, true),
-            theme,
-            'toolOutput'
-        );
+        addSection(lines, 'Response tail', formatSubagentTextTail(response), theme, 'toolOutput');
     }
 
     addSection(lines, 'Stats', formatSubagentStats(snapshot), theme, 'dim');

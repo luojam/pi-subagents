@@ -1,13 +1,89 @@
 import { homedir } from 'node:os';
 import { sep } from 'node:path';
-import type { SubagentRunSnapshot } from '../types.ts';
+import type { SubagentRunSnapshot, SubagentToolCallSnapshot } from '../types.ts';
 import { sanitizeTerminalText } from './terminal-sanitizer.ts';
-import { truncateUtf8Head } from './utf8.ts';
+import { truncateUtf8Head, truncateUtf8Tail } from './utf8.ts';
 
 const DETAIL_MAX_BYTES = 2 * 1_024;
+const TOOL_SUMMARY_MAX_BYTES = 1_024;
+const EXPANDED_TEXT_MAX_BYTES = 8 * 1_024;
+const TAIL_MAX_LINES = 16;
+
+export interface FormattedSubagentActivity {
+    readonly marker: '→' | '✓' | '✗' | '…';
+    readonly status: 'current' | SubagentToolCallSnapshot['state'];
+    readonly text: string;
+}
 
 function boundedLine(text: string, maxBytes: number): string {
     return truncateUtf8Head(sanitizeTerminalText(text), maxBytes);
+}
+
+export function formatToolCallSummary(tool: SubagentToolCallSnapshot): string {
+    const name = boundedLine(tool.name, 128) || 'tool';
+    const input = boundedLine(tool.inputSummary, TOOL_SUMMARY_MAX_BYTES);
+    switch (name) {
+        case 'bash':
+            return input ? `$ ${input}` : '$';
+        case 'read':
+        case 'edit':
+        case 'write':
+        case 'grep':
+            return input ? `${name} ${input}` : name;
+        default:
+            return input ? `${name} ${input}` : name;
+    }
+}
+
+function formatActivity(
+    tool: SubagentToolCallSnapshot,
+    current: boolean
+): FormattedSubagentActivity {
+    const isCurrent = current && tool.state === 'running';
+    const marker = isCurrent
+        ? '→'
+        : tool.state === 'completed'
+          ? '✓'
+          : tool.state === 'failed'
+            ? '✗'
+            : '…';
+    const progress =
+        isCurrent && tool.progressSummary
+            ? ` · ${boundedLine(tool.progressSummary, TOOL_SUMMARY_MAX_BYTES)}`
+            : '';
+    return {
+        marker,
+        status: isCurrent ? 'current' : tool.state,
+        text: `${formatToolCallSummary(tool)}${progress}`,
+    };
+}
+
+export function formatSubagentActivity(snapshot: SubagentRunSnapshot): FormattedSubagentActivity[] {
+    return [
+        ...(snapshot.currentTool ? [formatActivity(snapshot.currentTool, true)] : []),
+        ...snapshot.recentToolCalls
+            .filter((tool) => tool.id !== snapshot.currentTool?.id)
+            .map((tool) => formatActivity(tool, false)),
+    ];
+}
+
+export function formatSubagentTextTail(text: string): string[] {
+    const safe = sanitizeTerminalText(text, true);
+    const byteTruncated = Buffer.byteLength(safe, 'utf8') > EXPANDED_TEXT_MAX_BYTES;
+    const bounded = truncateUtf8Tail(safe, EXPANDED_TEXT_MAX_BYTES);
+    const allLines = bounded.split('\n');
+    const lines = allLines.length <= TAIL_MAX_LINES ? allLines : allLines.slice(-TAIL_MAX_LINES);
+    const omittedLineCount = Math.max(0, allLines.length - TAIL_MAX_LINES);
+
+    if (byteTruncated || omittedLineCount > 0) {
+        return [
+            byteTruncated
+                ? '… earlier content omitted'
+                : `… ${omittedLineCount} earlier lines omitted`,
+            ...lines,
+        ];
+    }
+    return lines;
 }
 
 export function formatCost(cost: number): string {
@@ -77,7 +153,7 @@ export function formatSubagentRuntime(snapshot: SubagentRunSnapshot): string[] {
     return [
         snapshot.cwd ? `cwd: ${compactPath(snapshot.cwd)}` : undefined,
         snapshot.model.provider && snapshot.model.id
-            ? `model: ${boundedLine(`${snapshot.model.provider}/${snapshot.model.id}`, DETAIL_MAX_BYTES)} · thinking ${boundedLine(snapshot.thinkingLevel, 128)}`
+            ? `model: ${boundedLine(`${snapshot.model.provider}/${snapshot.model.id}`, DETAIL_MAX_BYTES)} · ${boundedLine(snapshot.thinkingLevel, 128)}`
             : undefined,
         snapshot.sessionFile ? `transcript: ${compactPath(snapshot.sessionFile)}` : undefined,
     ].filter((line): line is string => !!line);

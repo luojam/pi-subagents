@@ -8,7 +8,13 @@ import {
     visibleWidth,
     wrapTextWithAnsi,
 } from '@earendil-works/pi-tui';
-import { formatSubagentRuntime, formatSubagentStats } from './formatting/run-details.ts';
+import {
+    type FormattedSubagentActivity,
+    formatSubagentActivity,
+    formatSubagentRuntime,
+    formatSubagentStats,
+    formatSubagentTextTail,
+} from './formatting/run-details.ts';
 import { isTerminalRunState } from './run-store.ts';
 import { type ConfiguredSubagentThinkingLevel, cycleSubagentThinkingLevel } from './thinking.ts';
 import type { SubagentRunSnapshot, SubagentRunState } from './types.ts';
@@ -16,6 +22,7 @@ import type { SubagentRunSnapshot, SubagentRunState } from './types.ts';
 const TARGET_HEIGHT_RATIO = 0.93;
 const FULL_MODAL_HEIGHT = 15;
 const SECTION_ROWS = 11;
+const MAX_EXPANDED_ACTIVITY_LINES = 3;
 const SUBAGENT_MODAL_SHORTCUT = Key.ctrlAlt('s');
 
 type ModalSection = 'activity' | 'configuration';
@@ -80,6 +87,8 @@ function compactKeyLabel(key: string | undefined): string | undefined {
         down: '↓',
         left: '←',
         right: '→',
+        pageUp: 'pgup',
+        pageDown: 'pgdn',
         escape: 'esc',
     };
     return labels[key] ?? key;
@@ -465,9 +474,29 @@ export class SubagentsModal implements Component {
                 : this.runs.length > 0
                   ? `${selectionHint}${expanded ? '← collapse' : '→ expand'} · `
                   : '';
+        const selectedSpan = this.runSpans[this.selectedIndex];
+        const pagingActive =
+            this.focusedSection === 'activity' &&
+            expanded &&
+            selectedSpan !== undefined &&
+            selectedSpan.end - selectedSpan.start > listHeight;
+        const pageKeys = [
+            compactKeyLabel(this.keybindings.getKeys('tui.select.pageUp')[0]),
+            compactKeyLabel(this.keybindings.getKeys('tui.select.pageDown')[0]),
+        ]
+            .filter(Boolean)
+            .join('/');
+        const pagingHint = pagingActive
+            ? pageKeys
+                ? ` · ${pageKeys} scroll`
+                : ' · paging unbound'
+            : '';
         lines.push(
             contentRow(
-                this.theme.fg('dim', ` ${sectionHint}${navigationHint}${closeHint}${position}`)
+                this.theme.fg(
+                    'dim',
+                    ` ${sectionHint}${navigationHint}${closeHint}${pagingHint}${position}`
+                )
             )
         );
         lines.push(horizontalBorder('╰', '╯'));
@@ -768,29 +797,60 @@ export class SubagentsModal implements Component {
             ];
         }
 
+        const activity = formatSubagentActivity(run)
+            .slice(0, MAX_EXPANDED_ACTIVITY_LINES)
+            .map((item) => this.renderActivityDetail(item));
         return [
             ...taskLines,
             ...this.renderExpandedSection('Runtime', formatSubagentRuntime(run), width, 'muted'),
+            ...this.renderExpandedSection('Activity', activity, width),
+            ...(run.thinkingTail.trim()
+                ? this.renderExpandedSection(
+                      'Thinking tail (provider-exposed)',
+                      formatSubagentTextTail(run.thinkingTail).filter((line) => line.trim() !== ''),
+                      width,
+                      'dim'
+                  )
+                : []),
+            ...(run.responseTail.trim()
+                ? this.renderExpandedSection(
+                      'Response tail',
+                      formatSubagentTextTail(run.responseTail),
+                      width,
+                      'toolOutput'
+                  )
+                : []),
             ...this.renderExpandedSection('Stats', formatSubagentStats(run), width, 'dim'),
         ];
+    }
+
+    private renderActivityDetail(activity: FormattedSubagentActivity): string {
+        const color =
+            activity.status === 'current'
+                ? 'accent'
+                : activity.status === 'completed'
+                  ? 'success'
+                  : activity.status === 'failed'
+                    ? 'error'
+                    : 'warning';
+        return this.theme.fg(color, activity.marker) + this.theme.fg('muted', ` ${activity.text}`);
     }
 
     private renderExpandedSection(
         label: string,
         details: readonly string[],
         width: number,
-        color: 'muted' | 'dim'
+        color?: 'toolOutput' | 'muted' | 'dim'
     ): string[] {
         if (details.length === 0) return [];
         const labelIndentation = ' '.repeat(Math.min(4, Math.max(0, width - 1)));
         const detailIndentation = ' '.repeat(Math.min(6, Math.max(0, width - 1)));
         const detailWidth = Math.max(1, width - detailIndentation.length);
         return [
-            '',
             `${labelIndentation}${this.theme.fg('accent', label)}`,
             ...details.flatMap((detail) =>
                 this.wrapTask(detail, detailWidth).map(
-                    (line) => `${detailIndentation}${this.theme.fg(color, line)}`
+                    (line) => `${detailIndentation}${color ? this.theme.fg(color, line) : line}`
                 )
             ),
         ];
