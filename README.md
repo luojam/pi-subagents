@@ -1,34 +1,87 @@
-# π Subagent extension
+<div align="center">
 
-An in-process Pi subagent extension with isolated child sessions and bounded parallel execution.
+# π Subagents
 
-- `SubagentService` owns a FIFO queue, cancellation, and code-configurable execution capacity.
-- `RunStore` owns immutable logical snapshots for tools and UI subscribers.
-- Each admitted `SubagentRunner` owns exactly one child execution and reports logical outcome separately from physical resource release.
-- Child sessions are persisted as JSONL under Pi's agent session directory. Their `sessionFile` is published in live run details once available and retained in final tool details for successful runs; failed and cancelled calls may expose it only through transient updates.
+**Give Pi a small team.**
 
-## Concurrency
+Delegate focused work to isolated child agents and run independent tasks in parallel—all without leaving your Pi session.
 
-The extension admits up to **3** subagents concurrently by default. Use `/subagents` or press `Ctrl+Alt+S` in the TUI to set max parallelism from `1` through `8`; choose `1` to force serial execution.
+[![Pi extension](https://img.shields.io/badge/Pi-extension-8b5cf6)](./package.json)
+[![License: MIT](https://img.shields.io/badge/license-MIT-22c55e)](./LICENSE)
 
-## Availability
+</div>
 
-Use `/subagents` or press `Ctrl+Alt+S` in the TUI to open subagent management, where you can enable or disable the subagent tool. Disabling the tool prevents new calls without cancelling active or queued subagents.
+## Highlights
 
-## Thinking
+- ⚡ **Parallel by default** — run up to 3 agents at once, configurable from 1–8.
+- 🧠 **Full Pi environment** — each child gets the parent model, tools, instructions, and project context.
+- 👀 **Live activity** — follow queued and active runs from the TUI.
+- 💾 **Persistent sessions** — child transcripts are saved as JSONL in Pi's agent session directory.
+- 🛑 **Built-in control** — queueing, cancellation, and clean shutdown are handled for you.
 
-Subagents inherit the parent's effective thinking level by default. Use `/subagents` in the TUI to choose `inherit`, `low`, `medium`, `high`, `xhigh`, or `max`, or press `Ctrl+Alt+R` to cycle through those options; there is no command-line reasoning-level setting. `inherit` resolves the parent's current effective level without an extension-level cap, so parent model or thinking changes during the session are respected. An explicit value overrides the parent level. In both cases, the requested level is clamped to the selected model's capabilities; run snapshots and child sessions use the resulting effective level.
+> Subagents have isolated conversation contexts, but share the filesystem. They cannot spawn more subagents.
 
-The tool still delegates one task per call. Pi executes sibling tool calls in parallel, so the parent model controls dependencies through when it emits calls:
-
-1. Emit independent subagent calls together in one assistant turn.
-2. Pi waits for the sibling tool batch to finish.
-3. Emit dependent work in a later turn, after the prerequisite results are available.
-
-Parallel execution is best suited to research, exploration, review, tests, and work in disjoint modules. Child model contexts are isolated, but their filesystem is not: calls using the same `cwd` share one mutable workspace. Avoid parallel writes to overlapping files and contention on Git state, generated files, package managers, tests, ports, databases, or other shared resources.
-
-## Test without installing
+## Install
 
 ```bash
+pi install git:github.com/luojam/pi-subagents
+```
+
+Or try it for one session:
+
+```bash
+pi -e git:github.com/luojam/pi-subagents
+```
+
+## Use
+
+Just ask Pi to delegate suitable work:
+
+> Use subagents in parallel to inspect the architecture, test coverage, and documentation, then combine their findings into a plan.
+
+Each tool call handles one focused task. Independent calls emitted together run in parallel; dependent work should wait for the prerequisite results.
+
+Subagents are especially useful for **research, codebase exploration, reviews, tests, and changes in separate modules**.
+
+## Controls
+
+| Action | Command / shortcut |
+| --- | --- |
+| Open activity and settings | `/subagents` or `Ctrl+Alt+S` |
+| Cycle reasoning level | `Ctrl+Alt+R` |
+| Set parallelism | `/subagents` → **Max parallelism** |
+| Enable or disable delegation | `/subagents` → **Subagent tool** |
+
+Reasoning inherits the parent by default. You can choose `low`, `medium`, `high`, `xhigh`, or `max`; Pi automatically clamps the choice to the selected model's capabilities.
+
+## Parallel work safely
+
+Run tasks together only when they do not write the same files or compete for shared resources such as Git state, package managers, tests, ports, or databases. Use parallel agents for independent work and serial agents for overlapping changes.
+
+## Local development
+
+```bash
+npm install
+npm test
+npm run typecheck
 pi -e ./extensions/subagent/index.ts
+```
+
+## License
+
+[MIT](./LICENSE)
+
+## Architecture
+
+```mermaid
+flowchart TD
+    P["Parent Pi session"] -->|subagent tool calls| E["Subagent extension"]
+    E --> S["SubagentService<br/>FIFO queue + concurrency limit"]
+    S --> R["Admitted runners<br/>one per task"]
+    R --> C["Isolated child Pi sessions<br/>same model and tools"]
+    C -->|results + usage| P
+    C --> W[("Shared workspace")]
+    C --> J[("Persistent JSONL sessions")]
+    S --> D["RunStore snapshots"]
+    D -. live updates .-> T["TUI activity and controls"]
 ```
