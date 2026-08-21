@@ -336,7 +336,7 @@ it('navigates into tall expanded runs from either direction', () => {
     expect(lines.find((line) => line.includes(expandedTail))).toContain('\x1b[7m');
 });
 
-it('shows activity, reasoning, and response details for an expanded run', () => {
+it('shows stats, reasoning, and response details without tool activity for an expanded run', () => {
     const currentTool = {
         id: 'current',
         name: 'bash',
@@ -389,11 +389,9 @@ it('shows activity, reasoning, and response details for an expanded run', () => 
     modal.handleInput('\x1b[C');
     const expanded = modal.render(100).join('\n');
 
-    expect(expanded).toContain('Activity');
-    expect(expanded).toContain('→ $ npm test · 3 tests passed');
-    expect(expanded.match(/\$ npm test/gu)).toHaveLength(1);
-    expect(expanded).toContain('✓ read src/index.ts');
-    expect(expanded).toContain('✗ grep /missing/');
+    expect(expanded).not.toContain('→ $ npm test · 3 tests passed');
+    expect(expanded).not.toContain('✓ read src/index.ts');
+    expect(expanded).not.toContain('✗ grep /missing/');
     expect(expanded).not.toContain('old-activity.ts');
     expect(expanded).toContain('Thinking tail (provider-exposed)');
     expect(expanded).toContain('check the implementation');
@@ -407,10 +405,10 @@ it('shows activity, reasoning, and response details for an expanded run', () => 
     const rowAfter = (text: string, index: number) =>
         lines.findIndex((line, lineIndex) => lineIndex > index && line.includes(text));
     expect(row('Runtime')).toBe(row('active task') + 1);
-    expect(rowAfter('Activity', row('Runtime'))).toBe(row('model: test/model') + 1);
-    expect(row('Thinking tail (provider-exposed)')).toBe(row('✗ grep /missing/') + 1);
+    expect(row('Stats')).toBe(row('model: test/model') + 1);
+    expect(rowAfter('Activity', row('Runtime'))).toBe(-1);
+    expect(row('Thinking tail (provider-exposed)')).toBe(row('Stats') + 2);
     expect(row('Response tail')).toBe(row('then verify the result') + 1);
-    expect(row('Stats')).toBe(row('All tests pass.') + 1);
 });
 
 it('shows runtime and stats for an expanded run', () => {

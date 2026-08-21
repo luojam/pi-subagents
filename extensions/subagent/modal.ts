@@ -9,8 +9,6 @@ import {
     wrapTextWithAnsi,
 } from '@earendil-works/pi-tui';
 import {
-    type FormattedSubagentActivity,
-    formatSubagentActivity,
     formatSubagentRuntime,
     formatSubagentStats,
     formatSubagentTextTail,
@@ -22,7 +20,6 @@ import type { SubagentRunSnapshot, SubagentRunState } from './types.ts';
 const TARGET_HEIGHT_RATIO = 0.93;
 const FULL_MODAL_HEIGHT = 15;
 const SECTION_ROWS = 11;
-const MAX_EXPANDED_ACTIVITY_LINES = 3;
 const SUBAGENT_MODAL_SHORTCUT = Key.ctrlAlt('s');
 
 type ModalSection = 'activity' | 'configuration';
@@ -797,13 +794,10 @@ export class SubagentsModal implements Component {
             ];
         }
 
-        const activity = formatSubagentActivity(run)
-            .slice(0, MAX_EXPANDED_ACTIVITY_LINES)
-            .map((item) => this.renderActivityDetail(item));
         return [
             ...taskLines,
             ...this.renderExpandedSection('Runtime', formatSubagentRuntime(run), width, 'muted'),
-            ...this.renderExpandedSection('Activity', activity, width),
+            ...this.renderExpandedSection('Stats', formatSubagentStats(run), width, 'dim'),
             ...(run.thinkingTail.trim()
                 ? this.renderExpandedSection(
                       'Thinking tail (provider-exposed)',
@@ -820,20 +814,7 @@ export class SubagentsModal implements Component {
                       'toolOutput'
                   )
                 : []),
-            ...this.renderExpandedSection('Stats', formatSubagentStats(run), width, 'dim'),
         ];
-    }
-
-    private renderActivityDetail(activity: FormattedSubagentActivity): string {
-        const color =
-            activity.status === 'current'
-                ? 'accent'
-                : activity.status === 'completed'
-                  ? 'success'
-                  : activity.status === 'failed'
-                    ? 'error'
-                    : 'warning';
-        return this.theme.fg(color, activity.marker) + this.theme.fg('muted', ` ${activity.text}`);
     }
 
     private renderExpandedSection(
