@@ -5,10 +5,11 @@ import { Type } from 'typebox';
 import { openSubagentsModal } from './modal.ts';
 import {
     conciseSnapshotStatus,
+    createSubagentWidget,
     renderSubagentCall,
     renderSubagentResult,
-    renderSubagentWidget,
     type SubagentSharedRenderState,
+    type SubagentWidgetComponent,
 } from './render.ts';
 import { SubagentService } from './service.ts';
 import {
@@ -75,6 +76,7 @@ export default function subagentExtension(pi: ExtensionAPI): void {
     let configuredConcurrency = DEFAULT_SUBAGENT_CONCURRENCY;
     let service: SubagentService | undefined;
     let serviceInitializationError: unknown;
+    let agentWorking = false;
     let uiGeneration = 0;
     let unsubscribeWidget: (() => void) | undefined;
     let refreshWidget: (() => void) | undefined;
@@ -103,6 +105,7 @@ export default function subagentExtension(pi: ExtensionAPI): void {
         unsubscribeWidget = undefined;
         refreshWidget = undefined;
         serviceInitializationError = undefined;
+        agentWorking = false;
         try {
             configuredConcurrency = DEFAULT_SUBAGENT_CONCURRENCY;
             service = new SubagentService({ concurrency: configuredConcurrency });
@@ -118,24 +121,45 @@ export default function subagentExtension(pi: ExtensionAPI): void {
 
         let latestActiveRuns: readonly SubagentRunSnapshot[] = [];
         let latestQueuedCount = 0;
+        let widget: SubagentWidgetComponent | undefined;
+        ctx.ui.setWorkingVisible(false);
+
         const publishWidget = () => {
             if (generation !== uiGeneration) return;
+            const enabled = pi.getActiveTools().includes('subagent');
+            const thinkingLevel = ctx.model
+                ? resolveDisplayedSubagentThinkingLevel(
+                      configuredThinkingLevel,
+                      ctx.model,
+                      ctx.thinkingLevel ?? pi.getThinkingLevel()
+                  )
+                : configuredThinkingLevel;
+
+            if (widget) {
+                widget.update(
+                    latestActiveRuns,
+                    latestQueuedCount,
+                    enabled,
+                    thinkingLevel,
+                    agentWorking
+                );
+                return;
+            }
+
             ctx.ui.setWidget(
                 WIDGET_KEY,
-                (_tui, theme) =>
-                    renderSubagentWidget(
+                (tui, theme) => {
+                    widget = createSubagentWidget(
+                        tui,
                         latestActiveRuns,
                         latestQueuedCount,
-                        pi.getActiveTools().includes('subagent'),
-                        ctx.model
-                            ? resolveDisplayedSubagentThinkingLevel(
-                                  configuredThinkingLevel,
-                                  ctx.model,
-                                  ctx.thinkingLevel ?? pi.getThinkingLevel()
-                              )
-                            : configuredThinkingLevel,
+                        enabled,
+                        thinkingLevel,
+                        agentWorking,
                         theme
-                    ),
+                    );
+                    return widget;
+                },
                 { placement: 'aboveEditor' }
             );
         };
@@ -147,6 +171,15 @@ export default function subagentExtension(pi: ExtensionAPI): void {
         });
     });
 
+    pi.on('agent_start', () => {
+        agentWorking = true;
+        refreshWidget?.();
+    });
+    pi.on('agent_settled', (_event, ctx) => {
+        if (!ctx.isIdle()) return;
+        agentWorking = false;
+        refreshWidget?.();
+    });
     pi.on('thinking_level_select', () => refreshWidget?.());
     pi.on('model_select', () => refreshWidget?.());
 
@@ -282,6 +315,7 @@ export default function subagentExtension(pi: ExtensionAPI): void {
 
     pi.on('session_shutdown', async (_event, ctx) => {
         ++uiGeneration;
+        agentWorking = false;
         unsubscribeWidget?.();
         unsubscribeWidget = undefined;
         refreshWidget = undefined;

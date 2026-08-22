@@ -3,6 +3,7 @@ import { keyHint, keyText, type Theme } from '@earendil-works/pi-coding-agent';
 import {
     type Component,
     sliceByColumn,
+    type TUI,
     visibleWidth,
     wrapTextWithAnsi,
 } from '@earendil-works/pi-tui';
@@ -26,6 +27,8 @@ const EXPANDED_TEXT_MAX_BYTES = 8 * 1_024;
 const TASK_MAX_LINES = 8;
 const COLLAPSED_MAX_COLUMNS = 100;
 const TRUNCATED_TASK_END_PADDING_COLUMNS = 3;
+const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'] as const;
+const SPINNER_INTERVAL_MS = 80;
 
 type ThemeColor = 'toolOutput' | 'muted' | 'dim' | 'error';
 
@@ -506,36 +509,184 @@ export function renderSubagentResult(
     );
 }
 
-export function renderSubagentWidget(
+type IdleThinkingLevel = SubagentRunSnapshot['thinkingLevel'] | 'inherit' | 'unsupported';
+
+function subagentWidgetLines(
     activeRuns: readonly SubagentRunSnapshot[],
     queuedCount: number,
     enabled: boolean,
-    idleThinkingLevel: SubagentRunSnapshot['thinkingLevel'] | 'inherit' | 'unsupported',
-    theme: Theme
-): Component {
-    return new WidthSafeLines(() => {
-        const separator = theme.fg('dim', ' · ');
-        const name = theme.fg('accent', 'subagent');
-        const representative = activeRuns[0];
-        const displayedThinkingLevel = representative
-            ? activeRuns.every((run) => run.thinkingLevel === representative.thinkingLevel)
-                ? representative.thinkingLevel
-                : 'mixed'
-            : idleThinkingLevel;
-        const thinking = theme.fg('dim', boundedLine(displayedThinkingLevel, 128));
-        if (!enabled) {
-            return [[name, theme.fg('muted', 'disabled'), thinking].join(separator)];
-        }
-        if (activeRuns.length === 0 && queuedCount === 0) {
-            return [[name, theme.fg('muted', 'idle'), thinking].join(separator)];
-        }
-
+    idleThinkingLevel: IdleThinkingLevel,
+    theme: Theme,
+    width: number,
+    spinnerFrame?: string
+): string[] {
+    const separator = theme.fg('dim', ' · ');
+    const name = theme.fg('accent', 'subagent');
+    const representative = activeRuns[0];
+    const displayedThinkingLevel = representative
+        ? activeRuns.every((run) => run.thinkingLevel === representative.thinkingLevel)
+            ? representative.thinkingLevel
+            : 'mixed'
+        : idleThinkingLevel;
+    const thinking = theme.fg('dim', boundedLine(displayedThinkingLevel, 128));
+    let status: string;
+    if (!enabled) {
+        status = [name, theme.fg('muted', 'disabled'), thinking].join(separator);
+    } else if (activeRuns.length === 0 && queuedCount === 0) {
+        status = [name, theme.fg('muted', 'idle'), thinking].join(separator);
+    } else {
         const parts = [
             name,
             activeRuns.length > 0 ? theme.fg('accent', `${activeRuns.length} active`) : undefined,
             queuedCount > 0 ? theme.fg('dim', `${queuedCount} queued`) : undefined,
             thinking,
         ].filter((part): part is string => !!part);
-        return [parts.join(separator)];
-    });
+        status = parts.join(separator);
+    }
+
+    const working = spinnerFrame
+        ? `${theme.fg('accent', spinnerFrame)} ${theme.fg('muted', 'Working...')}`
+        : '';
+    const gap = width - 2 - visibleWidth(working) - visibleWidth(status);
+    return [` ${working}${' '.repeat(Math.max(working ? 1 : 0, gap))}${status} `];
+}
+
+export function renderSubagentWidget(
+    activeRuns: readonly SubagentRunSnapshot[],
+    queuedCount: number,
+    enabled: boolean,
+    idleThinkingLevel: IdleThinkingLevel,
+    theme: Theme,
+    spinnerFrame?: string
+): Component {
+    return new WidthSafeLines((width) =>
+        subagentWidgetLines(
+            activeRuns,
+            queuedCount,
+            enabled,
+            idleThinkingLevel,
+            theme,
+            width,
+            spinnerFrame
+        )
+    );
+}
+
+export interface SubagentWidgetComponent extends Component {
+    update(
+        activeRuns: readonly SubagentRunSnapshot[],
+        queuedCount: number,
+        enabled: boolean,
+        idleThinkingLevel: IdleThinkingLevel,
+        working: boolean
+    ): void;
+    dispose(): void;
+}
+
+class AnimatedSubagentWidget implements SubagentWidgetComponent {
+    private readonly tui: Pick<TUI, 'requestRender'>;
+    private readonly theme: Theme;
+    private activeRuns: readonly SubagentRunSnapshot[];
+    private queuedCount: number;
+    private enabled: boolean;
+    private idleThinkingLevel: IdleThinkingLevel;
+    private working: boolean;
+    private frameIndex = 0;
+    private timer: ReturnType<typeof setInterval> | undefined;
+
+    constructor(
+        tui: Pick<TUI, 'requestRender'>,
+        activeRuns: readonly SubagentRunSnapshot[],
+        queuedCount: number,
+        enabled: boolean,
+        idleThinkingLevel: IdleThinkingLevel,
+        working: boolean,
+        theme: Theme
+    ) {
+        this.tui = tui;
+        this.theme = theme;
+        this.activeRuns = activeRuns;
+        this.queuedCount = queuedCount;
+        this.enabled = enabled;
+        this.idleThinkingLevel = idleThinkingLevel;
+        this.working = working;
+        this.syncAnimation();
+    }
+
+    update(
+        activeRuns: readonly SubagentRunSnapshot[],
+        queuedCount: number,
+        enabled: boolean,
+        idleThinkingLevel: IdleThinkingLevel,
+        working: boolean
+    ): void {
+        const wasWorking = this.working;
+        this.activeRuns = activeRuns;
+        this.queuedCount = queuedCount;
+        this.enabled = enabled;
+        this.idleThinkingLevel = idleThinkingLevel;
+        this.working = working;
+        this.syncAnimation(wasWorking);
+        this.tui.requestRender();
+    }
+
+    render(width: number): string[] {
+        const spinnerFrame = this.working ? SPINNER_FRAMES[this.frameIndex] : undefined;
+        return renderSubagentWidget(
+            this.activeRuns,
+            this.queuedCount,
+            this.enabled,
+            this.idleThinkingLevel,
+            this.theme,
+            spinnerFrame
+        ).render(width);
+    }
+
+    invalidate(): void {
+        // The widget renders directly from current state and theme.
+    }
+
+    dispose(): void {
+        this.stopAnimation();
+    }
+
+    private syncAnimation(wasWorking = false): void {
+        if (this.working === wasWorking) return;
+        if (!this.working) {
+            this.stopAnimation();
+            this.frameIndex = 0;
+            return;
+        }
+
+        this.frameIndex = 0;
+        this.timer = setInterval(() => {
+            this.frameIndex = (this.frameIndex + 1) % SPINNER_FRAMES.length;
+            this.tui.requestRender();
+        }, SPINNER_INTERVAL_MS);
+    }
+
+    private stopAnimation(): void {
+        if (this.timer) clearInterval(this.timer);
+        this.timer = undefined;
+    }
+}
+
+export function createSubagentWidget(
+    tui: Pick<TUI, 'requestRender'>,
+    activeRuns: readonly SubagentRunSnapshot[],
+    queuedCount: number,
+    enabled: boolean,
+    idleThinkingLevel: IdleThinkingLevel,
+    working: boolean,
+    theme: Theme
+): SubagentWidgetComponent {
+    return new AnimatedSubagentWidget(
+        tui,
+        activeRuns,
+        queuedCount,
+        enabled,
+        idleThinkingLevel,
+        working,
+        theme
+    );
 }
