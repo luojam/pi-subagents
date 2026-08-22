@@ -1,5 +1,5 @@
 import { realpath, stat } from 'node:fs/promises';
-import { isAbsolute, relative, resolve, sep } from 'node:path';
+import { basename, isAbsolute, relative, resolve, sep } from 'node:path';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
 import { openSubagentsModal } from './modal.ts';
@@ -124,6 +124,13 @@ export default function subagentExtension(pi: ExtensionAPI): void {
         let widget: SubagentWidgetComponent | undefined;
         ctx.ui.setWorkingVisible(false);
 
+        const updateTerminalTitle = (spinnerFrame?: string) => {
+            const sessionName = pi.getSessionName();
+            const cwd = basename(ctx.cwd);
+            const baseTitle = sessionName ? `π - ${sessionName} - ${cwd}` : `π - ${cwd}`;
+            ctx.ui.setTitle(spinnerFrame ? `${spinnerFrame} ${baseTitle}` : baseTitle);
+        };
+
         const publishWidget = () => {
             if (generation !== uiGeneration) return;
             const enabled = pi.getActiveTools().includes('subagent');
@@ -156,7 +163,8 @@ export default function subagentExtension(pi: ExtensionAPI): void {
                         enabled,
                         thinkingLevel,
                         agentWorking,
-                        theme
+                        theme,
+                        updateTerminalTitle
                     );
                     return widget;
                 },

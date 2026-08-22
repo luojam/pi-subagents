@@ -586,6 +586,7 @@ export interface SubagentWidgetComponent extends Component {
 class AnimatedSubagentWidget implements SubagentWidgetComponent {
     private readonly tui: Pick<TUI, 'requestRender'>;
     private readonly theme: Theme;
+    private readonly onSpinnerFrameChange?: (spinnerFrame: string | undefined) => void;
     private activeRuns: readonly SubagentRunSnapshot[];
     private queuedCount: number;
     private enabled: boolean;
@@ -601,10 +602,12 @@ class AnimatedSubagentWidget implements SubagentWidgetComponent {
         enabled: boolean,
         idleThinkingLevel: IdleThinkingLevel,
         working: boolean,
-        theme: Theme
+        theme: Theme,
+        onSpinnerFrameChange?: (spinnerFrame: string | undefined) => void
     ) {
         this.tui = tui;
         this.theme = theme;
+        this.onSpinnerFrameChange = onSpinnerFrameChange;
         this.activeRuns = activeRuns;
         this.queuedCount = queuedCount;
         this.enabled = enabled;
@@ -648,6 +651,7 @@ class AnimatedSubagentWidget implements SubagentWidgetComponent {
 
     dispose(): void {
         this.stopAnimation();
+        this.onSpinnerFrameChange?.(undefined);
     }
 
     private syncAnimation(wasWorking = false): void {
@@ -655,12 +659,15 @@ class AnimatedSubagentWidget implements SubagentWidgetComponent {
         if (!this.working) {
             this.stopAnimation();
             this.frameIndex = 0;
+            this.onSpinnerFrameChange?.(undefined);
             return;
         }
 
         this.frameIndex = 0;
+        this.onSpinnerFrameChange?.(SPINNER_FRAMES[this.frameIndex]);
         this.timer = setInterval(() => {
             this.frameIndex = (this.frameIndex + 1) % SPINNER_FRAMES.length;
+            this.onSpinnerFrameChange?.(SPINNER_FRAMES[this.frameIndex]);
             this.tui.requestRender();
         }, SPINNER_INTERVAL_MS);
     }
@@ -678,7 +685,8 @@ export function createSubagentWidget(
     enabled: boolean,
     idleThinkingLevel: IdleThinkingLevel,
     working: boolean,
-    theme: Theme
+    theme: Theme,
+    onSpinnerFrameChange?: (spinnerFrame: string | undefined) => void
 ): SubagentWidgetComponent {
     return new AnimatedSubagentWidget(
         tui,
@@ -687,6 +695,7 @@ export function createSubagentWidget(
         enabled,
         idleThinkingLevel,
         working,
-        theme
+        theme,
+        onSpinnerFrameChange
     );
 }

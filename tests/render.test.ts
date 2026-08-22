@@ -45,13 +45,26 @@ it('keeps the working indicator left while aligning subagent status right', () =
 it('animates while Pi is working and stops cleanly', () => {
     vi.useFakeTimers();
     const requestRender = vi.fn();
-    const widget = createSubagentWidget({ requestRender }, [], 0, true, 'low', true, theme);
+    const spinnerFrameChanged = vi.fn();
+    const widget = createSubagentWidget(
+        { requestRender },
+        [],
+        0,
+        true,
+        'low',
+        true,
+        theme,
+        spinnerFrameChanged
+    );
 
     expect(widget.render(42)[0]).toBe(` ⠋ Working...${' '.repeat(7)}subagent · idle · low `);
+    expect(spinnerFrameChanged).toHaveBeenLastCalledWith('⠋');
     vi.advanceTimersByTime(80);
     expect(widget.render(42)[0]).toBe(` ⠙ Working...${' '.repeat(7)}subagent · idle · low `);
+    expect(spinnerFrameChanged).toHaveBeenLastCalledWith('⠙');
 
     widget.update([], 0, true, 'low', false);
+    expect(spinnerFrameChanged).toHaveBeenLastCalledWith(undefined);
     const renderRequestsAfterStop = requestRender.mock.calls.length;
     vi.advanceTimersByTime(160);
     expect(requestRender).toHaveBeenCalledTimes(renderRequestsAfterStop);
