@@ -225,6 +225,24 @@ it('expands the selected run without changing modal dimensions', () => {
     expect(modal.render(40).join('\n')).not.toContain(expandedTail);
 });
 
+it('moves expansion to the newly selected run', () => {
+    const source = new TestRunSource([
+        run('first', 'running', `${'first task '.repeat(6)}\nFIRST_EXPANDED_TAIL`),
+        run('second', 'queued', `${'second task '.repeat(6)}\nSECOND_EXPANDED_TAIL`),
+    ]);
+    const { modal } = setup(source, undefined, undefined, 24);
+    modal.render(40);
+
+    modal.handleInput('\x1b[C');
+    expect(modal.render(40).join('\n')).toContain('FIRST_EXPANDED_TAIL');
+
+    modal.handleInput('tui.select.down');
+    const lines = modal.render(40);
+    expect(lines.join('\n')).not.toContain('FIRST_EXPANDED_TAIL');
+    expect(lines.join('\n')).toContain('SECOND_EXPANDED_TAIL');
+    expect(lines.find((line) => line.includes('SECOND_EXPANDED_TAIL'))).toContain('\x1b[7m');
+});
+
 it('pages through an expanded run that is taller than the activity viewport', () => {
     const expandedTail = 'OVERSIZED_TASK_TAIL';
     const source = new TestRunSource([
@@ -276,6 +294,31 @@ it('honors pending navigation when a live update arrives before rendering', () =
     expect(modal.render(40).join('\n')).toContain('LINE_0');
 });
 
+it('keeps an upward navigation reveal pinned to a growing run until rendering', () => {
+    const task = Array.from({ length: 10 }, (_, index) => `LINE_${index}`).join('\n');
+    const source = new TestRunSource([run('expanded', 'running', task), run('last', 'queued')]);
+    const { modal } = setup(source, undefined, undefined, 18);
+    modal.render(40);
+    modal.handleInput('\x1b[C');
+    modal.render(40);
+    modal.handleInput('tui.select.down');
+    modal.render(40);
+
+    modal.handleInput('tui.select.up');
+    source.publish([
+        { ...run('expanded', 'running', task), responseTail: 'FIRST_NEW_TAIL' },
+        run('last', 'queued'),
+    ]);
+    source.publish([
+        { ...run('expanded', 'running', task), responseTail: 'FIRST_NEW_TAIL\nLATEST_NEW_TAIL' },
+        run('last', 'queued'),
+    ]);
+
+    const lines = modal.render(40);
+    expect(lines.join('\n')).toContain('LATEST_NEW_TAIL');
+    expect(lines.find((line) => line.includes('LATEST_NEW_TAIL'))).toContain('\x1b[7m');
+});
+
 it('keeps an expanded run within its paging range after the viewport grows', () => {
     const task = Array.from({ length: 10 }, (_, index) => `LINE_${index}`).join('\n');
     const source = new TestRunSource([
@@ -299,35 +342,36 @@ it('keeps an expanded run within its paging range after the viewport grows', () 
     expect(lines.join('\n')).toContain('Runtime');
 });
 
-it('navigates into tall expanded runs from either direction', () => {
+it('moves expansion when navigating between tall runs from either direction', () => {
     const expandedTail = 'TALL_EXPANDED_TAIL';
-    const runs = [
+    const source = new TestRunSource([
         run('first', 'running'),
         run('expanded', 'running', `${'expanded row content '.repeat(12)}${expandedTail}`),
         run('last', 'queued'),
-    ];
-    const source = new TestRunSource(runs);
+    ]);
     const { modal } = setup(source, undefined, undefined, 18);
     modal.render(40);
 
     modal.handleInput('tui.select.down');
-    expect(modal.render(40).find((line) => line.includes('expanded row'))).toContain('\x1b[7m');
-    source.publish(runs);
-    expect(modal.render(40).find((line) => line.includes('expanded row'))).toContain('\x1b[7m');
-
     modal.handleInput('\x1b[C');
     modal.render(40);
-    modal.handleInput('tui.select.up');
-    modal.render(40);
-    modal.handleInput('tui.select.pageDown');
 
+    modal.handleInput('tui.select.up');
     let lines = modal.render(40);
+    for (let page = 0; page < 10 && !lines.join('\n').includes('first task'); page++) {
+        modal.handleInput('tui.select.pageUp');
+        lines = modal.render(40);
+    }
+    expect(lines.find((line) => line.includes('first task'))).toContain('\x1b[7m');
+
+    modal.handleInput('tui.select.down');
+    lines = modal.render(40);
     expect(lines.find((line) => line.includes('expanded row'))).toContain('\x1b[7m');
     expect(lines.find((line) => line.includes('last task'))).toBeUndefined();
 
     modal.handleInput('tui.select.down');
     modal.render(40);
-    modal.handleInput('tui.select.pageUp');
+    modal.handleInput('tui.select.up');
     lines = modal.render(40);
     for (let page = 0; page < 10 && !lines.join('\n').includes(expandedTail); page++) {
         modal.handleInput('tui.select.pageUp');

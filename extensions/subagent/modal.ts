@@ -264,9 +264,12 @@ export class SubagentsModal implements Component {
         }
 
         if (nextIndex !== this.selectedIndex) {
+            const expanded = this.expandedRunId !== undefined;
             this.selectedIndex = nextIndex;
+            if (expanded) this.expandedRunId = this.runs[nextIndex]?.id;
             this.pendingSelectedViewportOffset = undefined;
             this.revealSelectedRun = revealEdge;
+            if (expanded) this.relayoutActivityRuns();
             this.tui.requestRender();
         }
     }
@@ -629,8 +632,13 @@ export class SubagentsModal implements Component {
 
     private relayoutActivityRuns(): void {
         if (this.activityContentWidth === undefined) return;
+        const pendingReveal = this.revealSelectedRun;
         this.layoutActivityRuns(this.activityContentWidth);
         this.updateActivityViewport(this.visibleListHeight);
+
+        if (pendingReveal && this.runSpans[this.selectedIndex]) {
+            this.revealSelectedRun = pendingReveal;
+        }
     }
 
     private renderSectionHeader(label: string, detail: string, focused: boolean): string {
