@@ -2,9 +2,9 @@
 
 # Pi Subagents
 
-**π**
-
 Configurable subagent extension for Pi.
+
+![Pi Subagents running parallel tasks with the activity panel open](./assets/pi-subagents.png)
 
 </div>
 
