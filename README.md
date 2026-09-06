@@ -15,7 +15,7 @@ Configurable subagent extension for Pi.
 - Set the subagent reasoning level. By default, subagents inherit the parent’s reasoning level.
 - Each subagent inherits the parent model, tools (excluding subagent), instructions, and project context.
 - Inspect subagent runs from the TUI.
-- Subagent transcripts are saved as JSONL under `<agent-dir>/sessions/subagents/` (default: `~/.pi/agent/sessions/subagents/`).
+- Subagent transcripts are saved as JSONL under `<agent-dir>/pi-subagents/sessions/` (default: `~/.pi/agent/pi-subagents/sessions/`).
 
 ## Install
 

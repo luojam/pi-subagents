@@ -95,7 +95,7 @@ export class SubagentService {
         this.concurrency = concurrency;
         this.createId = options.createId ?? randomUUID;
         this.childSessionDirectory =
-            options.childSessionDirectory ?? join(getAgentDir(), 'sessions', 'subagents');
+            options.childSessionDirectory ?? join(getAgentDir(), 'pi-subagents', 'sessions');
         this.runnerFactory = options.runnerFactory ?? (() => new SubagentRunner());
         this.store =
             options.store ??
