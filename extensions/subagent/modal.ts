@@ -234,12 +234,14 @@ export class SubagentsModal implements Component {
         ).some((action) => this.keybindings.matches(data, action));
         const expand = !matchesNavigation && matchesKey(data, Key.right);
         const collapse = !matchesNavigation && matchesKey(data, Key.left);
+        const toggle = !matchesNavigation && this.keybindings.matches(data, 'tui.select.confirm');
         if (
             selectedRun &&
-            ((expand && this.expandedRunId !== selectedRun.id) ||
+            (toggle ||
+                (expand && this.expandedRunId !== selectedRun.id) ||
                 (collapse && this.expandedRunId === selectedRun.id))
         ) {
-            this.expandedRunId = expand ? selectedRun.id : undefined;
+            this.expandedRunId = this.expandedRunId === selectedRun.id ? undefined : selectedRun.id;
             this.pendingSelectedViewportOffset = undefined;
             this.revealSelectedRun = 'start';
             this.relayoutActivityRuns();

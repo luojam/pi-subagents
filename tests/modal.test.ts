@@ -208,12 +208,16 @@ it('expands the selected run without changing modal dimensions', () => {
     expect(collapsed.join('\n')).not.toContain(expandedTail);
 
     modal.handleInput('tui.select.confirm');
+    expect(modal.render(40).join('\n')).toContain(expandedTail);
+    expect(requestRender).toHaveBeenCalledOnce();
+
+    modal.handleInput('tui.select.confirm');
     expect(modal.render(40).join('\n')).not.toContain(expandedTail);
-    expect(requestRender).not.toHaveBeenCalled();
+    expect(requestRender).toHaveBeenCalledTimes(2);
 
     modal.handleInput('\x1b[C');
     const expanded = modal.render(40);
-    expect(requestRender).toHaveBeenCalledOnce();
+    expect(requestRender).toHaveBeenCalledTimes(3);
     expect(expanded.join('\n')).toContain(expandedTail);
     expect(expanded.find((line) => line.includes(expandedTail))).toContain('\x1b[7m');
     expect(expanded).toHaveLength(collapsed.length);
