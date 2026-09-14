@@ -240,12 +240,10 @@ export default function subagentExtension(pi: ExtensionAPI): void {
         name: 'subagent',
         label: 'Subagent',
         description:
-            'Delegate a task to a general-purpose subagent that has access to all the same tools and capabilities as the parent, excluding spawning subagents. Independent sibling subagent calls can execute concurrently.',
+            'Delegate a task to a general-purpose subagent with an isolated context and access to all the same tools and capabilities as the parent, excluding spawning subagents.',
         promptSnippet: 'Delegate a self-contained task to a fully capable Pi subagent',
         promptGuidelines: [
-            'Use subagent for a self-contained delegated task where an isolated context is useful.',
-            'Emit independent subagent calls together in one turn; wait for their results and use a later turn for dependent tasks.',
-            'Favor parallel subagent calls for independent research, exploration, review, tests, or work in disjoint modules.',
+            'Emit independent subagent calls together in one turn; wait for their results before starting dependent tasks.',
             'Do not parallelize subagent calls that may write the same files or contend for shared mutable resources.',
         ],
         parameters: SubagentParameters,
